@@ -272,6 +272,8 @@ ${data.toString()}
           if (!this._extensionConnection) {
             debugLogger("Extension reconnect grace period expired, closing Playwright");
             this._closePlaywrightConnection(`Extension disconnected: ${reason} (reconnect timeout)`);
+            debugLogger("No extension connection after grace period — exiting for launcher respawn");
+            process.exit(1);
           }
         }, EXTENSION_RECONNECT_GRACE_MS);
       }
