@@ -1,10 +1,10 @@
 {
   "name": "@playwright/mcp",
-  "version": "0.0.68",
+  "version": "0.0.68-fork.1",
   "description": "Playwright Tools for MCP",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/microsoft/playwright-mcp.git"
+    "url": "git+https://github.com/faroukBakari/playwright-mcp.git"
   },
   "homepage": "https://playwright.dev",
   "engines": {
@@ -32,7 +32,6 @@
     }
   },
   "dependencies": {
-    "playwright": "1.59.0-alpha-1771104257000",
     "playwright-core": "1.59.0-alpha-1771104257000"
   },
   "bin": {

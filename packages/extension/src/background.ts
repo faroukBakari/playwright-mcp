@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { RelayConnection, debugLog } from './relayConnection';
+import { RelayConnection, debugLog, setInterferingExtensions } from './relayConnection';
 
 type PageMessage = {
   type: 'connectToMCPRelay';
@@ -36,6 +36,8 @@ class TabShareExtension {
   private _activeConnection: RelayConnection | undefined;
   private _connectedTabId: number | null = null;
   private _pendingTabSelection = new Map<number, { connection: RelayConnection, timerId?: number }>();
+  private _autoReconnecting = false;
+  private _relay: RelayConnection | null = null;
 
   constructor() {
     chrome.tabs.onRemoved.addListener(this._onTabRemoved.bind(this));
@@ -43,6 +45,47 @@ class TabShareExtension {
     chrome.tabs.onActivated.addListener(this._onTabActivated.bind(this));
     chrome.runtime.onMessage.addListener(this._onMessage.bind(this));
     chrome.action.onClicked.addListener(this._onActionClicked.bind(this));
+    void this._startAutoConnect();
+  }
+
+  private async _startAutoConnect(): Promise<void> {
+    const stored = await chrome.storage.local.get('relayPort');
+    const port = stored['relayPort'] || 56229;
+    const url = `ws://localhost:${port}/extension`;
+    let delay = 1000;
+    const MAX_DELAY = 30000;
+    const attempt = () => {
+      if (this._relay) return;
+      debugLog(`Auto-connect: connecting to ${url}`);
+      const ws = new WebSocket(url);
+      ws.onopen = () => {
+        debugLog('Auto-connect: connected to relay');
+        delay = 1000;
+        const connection = new RelayConnection(ws);
+        this._relay = connection;
+        this._activeConnection = connection;
+        connection.onclose = () => {
+          debugLog('Auto-connect: relay connection lost');
+          this._relay = null;
+          if (this._activeConnection === connection) {
+            this._activeConnection = undefined;
+            void this._setConnectedTabId(null);
+          }
+          setTimeout(attempt, delay);
+        };
+      };
+      ws.onerror = () => {
+        ws.close();
+      };
+      ws.onclose = () => {
+        if (!this._relay) {
+          delay = Math.min(delay * 2, MAX_DELAY);
+          debugLog(`Auto-connect: retry in ${delay}ms`);
+          setTimeout(attempt, delay);
+        }
+      };
+    };
+    attempt();
   }
 
   // Promise-based message handling is not supported in Chrome: https://issues.chromium.org/issues/40753031
@@ -119,11 +162,19 @@ class TabShareExtension {
         throw new Error('No active MCP relay connection');
       this._pendingTabSelection.delete(selectorTabId);
 
+      // Neutralize extensions that hijack chrome.debugger before we attach
+      await setInterferingExtensions(false);
       this._activeConnection.setTabId(tabId);
       this._activeConnection.onclose = () => {
         debugLog('MCP connection closed');
+        const savedTabId = this._connectedTabId;
         this._activeConnection = undefined;
         void this._setConnectedTabId(null);
+        // Auto-reconnect to same tab if connection was lost unexpectedly
+        if (savedTabId && mcpRelayUrl && !this._autoReconnecting) {
+          debugLog(`Auto-reconnecting to tab ${savedTabId} via ${mcpRelayUrl}`);
+          void this._autoReconnect(savedTabId, windowId, mcpRelayUrl);
+        }
       };
 
       await Promise.all([
@@ -168,9 +219,10 @@ class TabShareExtension {
     }
     if (this._connectedTabId !== tabId)
       return;
+    this._connectedTabId = null; // Clear before close to prevent auto-reconnect
     this._activeConnection?.close('Browser tab closed');
     this._activeConnection = undefined;
-    this._connectedTabId = null;
+    void setInterferingExtensions(true);
   }
 
   private _onTabActivated(activeInfo: chrome.tabs.TabActiveInfo) {
@@ -213,9 +265,33 @@ class TabShareExtension {
   }
 
   private async _disconnect(): Promise<void> {
+    this._connectedTabId = null; // Clear before close to prevent auto-reconnect
     this._activeConnection?.close('User disconnected');
     this._activeConnection = undefined;
     await this._setConnectedTabId(null);
+    await setInterferingExtensions(true);
+  }
+
+  private async _autoReconnect(tabId: number, windowId: number, mcpRelayUrl: string): Promise<void> {
+    if (this._autoReconnecting)
+      return;
+    this._autoReconnecting = true;
+    try {
+      // Verify tab still exists before reconnecting
+      try {
+        await chrome.tabs.get(tabId);
+      } catch {
+        debugLog(`Tab ${tabId} no longer exists, skipping auto-reconnect`);
+        return;
+      }
+      await this._connectToRelay(tabId, mcpRelayUrl);
+      await this._connectTab(tabId, tabId, windowId, mcpRelayUrl);
+      debugLog(`Auto-reconnected to tab ${tabId}`);
+    } catch (e: any) {
+      debugLog(`Auto-reconnect failed:`, e.message);
+    } finally {
+      this._autoReconnecting = false;
+    }
   }
 }
 
