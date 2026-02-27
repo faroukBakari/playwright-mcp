@@ -153,6 +153,25 @@ async function handleStreamable(serverBackendFactory, req, res, sessions) {
     testDebug(`stale session ${sessionId}, creating new session`);
   }
   if (req.method === "POST") {
+    // If stale session, pre-read body for auto-recovery check.
+    // The stream is consumed, so all subsequent handleRequest calls use parsedBody.
+    let parsedBody;
+    if (sessionId) {
+      try {
+        const chunks = [];
+        for await (const chunk of req) chunks.push(chunk);
+        parsedBody = JSON.parse(Buffer.concat(chunks).toString());
+      } catch {
+        res.setHeader("Content-Type", "application/json");
+        res.statusCode = 400;
+        res.end(JSON.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32700, message: "Parse error: Invalid JSON" },
+          id: null
+        }));
+        return;
+      }
+    }
     const transport = new mcpBundle.StreamableHTTPServerTransport({
       sessionIdGenerator: () => import_crypto.default.randomUUID(),
       onsessioninitialized: async (sessionId2) => {
@@ -167,6 +186,61 @@ async function handleStreamable(serverBackendFactory, req, res, sessions) {
       sessions.delete(transport.sessionId);
       testDebug(`delete http session: ${transport.sessionId}`);
     };
+    // Auto-recovery: stale session with a non-initialize request.
+    // Initialize the transport internally, then replay the original request.
+    if (parsedBody) {
+      const messages = Array.isArray(parsedBody) ? parsedBody : [parsedBody];
+      const isInit = messages.some((m) => m.method === "initialize");
+      if (!isInit) {
+        try {
+          const initBody = {
+            jsonrpc: "2.0",
+            method: "initialize",
+            params: {
+              protocolVersion: "2025-03-26",
+              capabilities: {},
+              clientInfo: { name: "auto-recovery", version: "1.0" }
+            },
+            id: `__auto_init_${Date.now()}`
+          };
+          const initRequest = new Request(`http://localhost${req.url}`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "accept": "application/json, text/event-stream"
+            }
+          });
+          const initResponse = await transport._webStandardTransport.handleRequest(
+            initRequest, { parsedBody: initBody }
+          );
+          // Drain init response to prevent resource leaks
+          if (initResponse.body) {
+            const reader = initResponse.body.getReader();
+            try { while (!(await reader.read()).done) {} } catch {}
+          }
+          if (initResponse.status === 200) {
+            // Fix stale session ID in rawHeaders (hono reads these) and headers
+            const newSessionId = transport.sessionId;
+            for (let i = 0; i < req.rawHeaders.length; i += 2) {
+              if (req.rawHeaders[i].toLowerCase() === "mcp-session-id") {
+                req.rawHeaders[i + 1] = newSessionId;
+                break;
+              }
+            }
+            req.headers["mcp-session-id"] = newSessionId;
+            testDebug(`auto-recovered stale session ${sessionId} → ${newSessionId}`);
+          } else {
+            testDebug(`auto-recovery init failed: ${initResponse.status}`);
+          }
+        } catch (e) {
+          testDebug(`auto-recovery failed: ${e.message}`);
+        }
+      }
+      // Body was consumed — replay with parsedBody (works for both init and tool calls)
+      await transport.handleRequest(req, res, parsedBody);
+      return;
+    }
+    // Normal path (no stale session)
     await transport.handleRequest(req, res);
     return;
   }

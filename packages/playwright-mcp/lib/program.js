@@ -64,7 +64,7 @@ Please run the command below. It will install a local copy of ffmpeg and will no
       process.exit(1);
     }
     const browserContextFactory = (0, import_browserContextFactory.contextFactory)(config);
-    const forceNewTab = !!config.sessionConfig;
+    const forceNewTab = false;
     const extensionContextFactory = new import_extensionContextFactory.ExtensionContextFactory(config.browser.launchOptions.channel || "chrome", config.browser.userDataDir, config.browser.launchOptions.executablePath, forceNewTab);
     if (config.sessionConfig) {
       const contextFactory2 = config.extension ? extensionContextFactory : browserContextFactory;
