@@ -71,6 +71,13 @@ class Context {
     return this._currentTab;
   }
   async newTab() {
+    // Extension mode: create tab via Chrome API, then reconnect
+    if (typeof this._browserContextFactory.switchChromeTab === 'function') {
+      await this.switchChromeTab('new');
+      await this._ensureBrowserContext();
+      return this._currentTab;
+    }
+    // Standard path
     const { browserContext } = await this._ensureBrowserContext();
     const page = await browserContext.newPage();
     this._currentTab = this._tabs.find((t) => t.page === page);
@@ -230,28 +237,6 @@ class Context {
     await this.closeBrowserContext();
     this._tabs = [];
     this._currentTab = void 0;
-    return this._browserContextFactory.switchChromeTab(strategy, params);
-  }
-  async listChromeTabs() {
-    if (typeof this._browserContextFactory.listChromeTabs !== 'function')
-      throw new Error("Chrome tab selection is only available in extension mode");
-    return this._browserContextFactory.listChromeTabs();
-  }
-  async switchChromeTab(strategy, params) {
-    if (typeof this._browserContextFactory.switchChromeTab !== 'function')
-      throw new Error("Chrome tab selection is only available in extension mode");
-    await this.closeBrowserContext();
-    return this._browserContextFactory.switchChromeTab(strategy, params);
-  }
-  async listChromeTabs() {
-    if (typeof this._browserContextFactory.listChromeTabs !== 'function')
-      throw new Error("Chrome tab selection is only available in extension mode");
-    return this._browserContextFactory.listChromeTabs();
-  }
-  async switchChromeTab(strategy, params) {
-    if (typeof this._browserContextFactory.switchChromeTab !== 'function')
-      throw new Error("Chrome tab selection is only available in extension mode");
-    await this.closeBrowserContext();
     return this._browserContextFactory.switchChromeTab(strategy, params);
   }
   _ensureBrowserContext() {
