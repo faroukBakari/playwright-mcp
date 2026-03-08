@@ -14,6 +14,11 @@
  * limitations under the License.
  */
 
+// ia-custom: adapted for auth bypass (auto-connect, no manual approval UI).
+// Original upstream tests required clicking Allow/Connect buttons and testing
+// token-based auth. With our bypass, all connections auto-connect immediately.
+// Tests that verified manual approval flow now verify auto-connect behavior.
+
 import fs from 'fs/promises';
 import path from 'path';
 import { chromium } from 'playwright';
@@ -198,72 +203,56 @@ const testWithOldExtensionVersion = test.extend({
   },
 });
 
-test(`navigate with extension`, async ({ browserWithExtension, startClient, server }) => {
+// ia-custom: With auth bypass, connections auto-connect immediately — no manual
+// approval needed. Tests verify that navigation and snapshot work without any
+// user interaction on the connect page.
+
+test(`navigate with extension (auto-connect)`, async ({ browserWithExtension, startClient, server }) => {
   const browserContext = await browserWithExtension.launch();
 
   const client = await startWithExtensionFlag(browserWithExtension, startClient);
 
-  const confirmationPagePromise = browserContext.waitForEvent('page', page => {
-    return page.url().startsWith(`chrome-extension://${extensionId}/connect.html`);
-  });
-
-  const navigateResponse = client.callTool({
+  // ia-custom: auth bypass means no Allow button to click — just issue the
+  // tool call and the extension auto-connects.
+  expect(await client.callTool({
     name: 'browser_navigate',
     arguments: { url: server.HELLO_WORLD },
-  });
-
-  const selectorPage = await confirmationPagePromise;
-  // For browser_navigate command, the UI shows Allow/Reject buttons instead of tab selector
-  await selectorPage.getByRole('button', { name: 'Allow' }).click();
-
-  expect(await navigateResponse).toHaveResponse({
+  })).toHaveResponse({
     snapshot: expect.stringContaining(`- generic [active] [ref=e1]: Hello, world!`),
   });
 });
 
-test(`snapshot of an existing page`, async ({ browserWithExtension, startClient, server }) => {
+test(`snapshot with auto-connect`, async ({ browserWithExtension, startClient, server }) => {
   const browserContext = await browserWithExtension.launch();
 
   const page = await browserContext.newPage();
   await page.goto(server.HELLO_WORLD);
 
-  // Another empty page.
-  await browserContext.newPage();
-  expect(browserContext.pages()).toHaveLength(3);
-
   const client = await startWithExtensionFlag(browserWithExtension, startClient);
-  expect(browserContext.pages()).toHaveLength(3);
 
-  const confirmationPagePromise = browserContext.waitForEvent('page', page => {
-    return page.url().startsWith(`chrome-extension://${extensionId}/connect.html`);
-  });
-
-  const navigateResponse = client.callTool({
+  // ia-custom: with auth bypass, snapshot auto-connects to the active tab
+  // without showing the tab selector UI.
+  expect(await client.callTool({
     name: 'browser_snapshot',
     arguments: { },
+  })).toHaveResponse({
+    snapshot: expect.stringContaining(`Hello, world!`),
   });
-
-  const selectorPage = await confirmationPagePromise;
-  expect(browserContext.pages()).toHaveLength(4);
-
-  await selectorPage.locator('.tab-item', { hasText: 'Title' }).getByRole('button', { name: 'Connect' }).click();
-
-  expect(await navigateResponse).toHaveResponse({
-    snapshot: expect.stringContaining(`- generic [active] [ref=e1]: Hello, world!`),
-  });
-
-  expect(browserContext.pages()).toHaveLength(4);
 });
 
 test(`extension not installed timeout`, async ({ browserWithExtension, startClient, server, useShortConnectionTimeout }) => {
   useShortConnectionTimeout(100);
 
-  const browserContext = await browserWithExtension.launch();
+  // Launch browser WITHOUT the extension loaded
+  const browserContext = await browserWithExtension.launch('disable-extension');
 
-  const client = await startWithExtensionFlag(browserWithExtension, startClient);
-
-  const confirmationPagePromise = browserContext.waitForEvent('page', page => {
-    return page.url().startsWith(`chrome-extension://${extensionId}/connect.html`);
+  const { client } = await startClient({
+    args: [`--extension`],
+    config: {
+      browser: {
+        userDataDir: browserWithExtension.userDataDir,
+      }
+    },
   });
 
   expect(await client.callTool({
@@ -273,32 +262,18 @@ test(`extension not installed timeout`, async ({ browserWithExtension, startClie
     error: expect.stringContaining('Extension connection timeout. Make sure the "Playwright MCP Bridge" extension is installed.'),
     isError: true,
   });
-
-  await confirmationPagePromise;
 });
 
-testWithOldExtensionVersion(`works with old extension version`, async ({ browserWithExtension, startClient, server, useShortConnectionTimeout }) => {
-  useShortConnectionTimeout(500);
-
-  // Prelaunch the browser, so that it is properly closed after the test.
+testWithOldExtensionVersion(`works with old extension version (auto-connect)`, async ({ browserWithExtension, startClient, server }) => {
   const browserContext = await browserWithExtension.launch();
 
   const client = await startWithExtensionFlag(browserWithExtension, startClient);
 
-  const confirmationPagePromise = browserContext.waitForEvent('page', page => {
-    return page.url().startsWith(`chrome-extension://${extensionId}/connect.html`);
-  });
-
-  const navigateResponse = client.callTool({
+  // ia-custom: old extension version should still auto-connect successfully.
+  expect(await client.callTool({
     name: 'browser_navigate',
     arguments: { url: server.HELLO_WORLD },
-  });
-
-  const selectorPage = await confirmationPagePromise;
-  // For browser_navigate command, the UI shows Allow/Reject buttons instead of tab selector
-  await selectorPage.getByRole('button', { name: 'Allow' }).click();
-
-  expect(await navigateResponse).toHaveResponse({
+  })).toHaveResponse({
     snapshot: expect.stringContaining(`- generic [active] [ref=e1]: Hello, world!`),
   });
 });
@@ -312,6 +287,8 @@ test(`extension needs update`, async ({ browserWithExtension, startClient, serve
 
   const client = await startWithExtensionFlag(browserWithExtension, startClient);
 
+  // Version mismatch check runs BEFORE auth bypass, so this still triggers
+  // the version error and times out.
   const confirmationPagePromise = browserContext.waitForEvent('page', page => {
     return page.url().startsWith(`chrome-extension://${extensionId}/connect.html`);
   });
@@ -355,42 +332,33 @@ test(`custom executablePath`, async ({ startClient, server, useShortConnectionTi
     error: expect.stringContaining('Extension connection timeout.'),
     isError: true,
   });
+  // ia-custom: extension ID comes from PLAYWRIGHT_MCP_EXTENSION_ID env var
+  // (set in fixtures.ts to the published ID for test compatibility)
   expect(await fs.readFile(test.info().outputPath('output.txt'), 'utf8')).toMatch(new RegExp(`Custom exec args.*chrome-extension://${extensionId}/connect\\.html\\?`));
 });
 
-test(`bypass connection dialog with token`, async ({ browserWithExtension, startClient, server }) => {
+// ia-custom: Token auth is bypassed — connections auto-connect regardless of
+// token presence. This test verifies that connections work without any token
+// (the common case in our dev setup).
+test(`auto-connect without token`, async ({ browserWithExtension, startClient, server }) => {
   const browserContext = await browserWithExtension.launch();
 
-  const page = await browserContext.newPage();
-  await page.goto(`chrome-extension://${extensionId}/status.html`);
-  const token = await page.locator('.auth-token-code').textContent();
-  const [name, value] = token?.split('=') || [];
+  const client = await startWithExtensionFlag(browserWithExtension, startClient);
 
-  const { client } = await startClient({
-    args: [`--extension`],
-    extensionToken: value,
-    config: {
-      browser: {
-        userDataDir: browserWithExtension.userDataDir,
-      }
-    },
-  });
-
-  const navigateResponse = await client.callTool({
+  // No token set — should auto-connect via our bypass.
+  expect(await client.callTool({
     name: 'browser_navigate',
     arguments: { url: server.HELLO_WORLD },
-  });
-
-  expect(await navigateResponse).toHaveResponse({
+  })).toHaveResponse({
     snapshot: expect.stringContaining(`- generic [active] [ref=e1]: Hello, world!`),
   });
 });
 
 test.describe('CLI with extension', () => {
-  test('open <url> --extension', async ({ browserWithExtension, cli, server }, testInfo) => {
+  test('open <url> --extension (auto-connect)', async ({ browserWithExtension, cli, server }, testInfo) => {
     const browserContext = await browserWithExtension.launch();
 
-    // Write config file with userDataDir 
+    // Write config file with userDataDir
     const configPath = testInfo.outputPath('cli-config.json');
     await fs.writeFile(configPath, JSON.stringify({
       browser: {
@@ -398,21 +366,9 @@ test.describe('CLI with extension', () => {
       }
     }, null, 2));
 
-    const confirmationPagePromise = browserContext.waitForEvent('page', page => {
-      return page.url().startsWith(`chrome-extension://${extensionId}/connect.html`);
-    });
-
-    // Start the CLI command in the background
-    const cliPromise = cli('open', server.HELLO_WORLD, '--extension', `--config=cli-config.json`);
-
-    // Wait for the confirmation page to appear
-    const confirmationPage = await confirmationPagePromise;
-
-    // Click the Connect button
-    await confirmationPage.locator('.tab-item', { hasText: 'Playwright MCP extension' }).getByRole('button', { name: 'Connect' }).click();
-
-    // Wait for the CLI command to complete
-    const { output } = await cliPromise;
+    // ia-custom: with auth bypass, CLI auto-connects without needing to click
+    // the Connect button on the confirmation page.
+    const { output } = await cli('open', server.HELLO_WORLD, '--extension', `--config=cli-config.json`);
 
     // Verify the output
     expect(output).toContain(`### Page`);

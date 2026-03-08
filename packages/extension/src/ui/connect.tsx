@@ -17,7 +17,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Button, TabItem } from './tabItem';
-import { AuthTokenSection, getOrCreateAuthToken } from './authToken';
+import { AuthTokenSection } from './authToken';
 
 import type { TabInfo } from './tabItem';
 
@@ -89,27 +89,12 @@ const ConnectApp: React.FC = () => {
         return;
       }
 
-      const expectedToken = getOrCreateAuthToken();
-      const token = params.get('token');
-      if (token === expectedToken) {
-        await connectToMCPRelay(relayUrl);
-        await handleConnectToTab();
-        return;
-      }
-      if (token) {
-        handleReject('Invalid token provided.');
-        return;
-      }
-
+      // ia-custom: token authentication disabled during development.
+      // TODO: Re-enable token auth before production deployment.
+      // Original flow: token match → auto-connect, invalid token → reject,
+      // no token → manual approval UI. Now: always auto-connect.
       await connectToMCPRelay(relayUrl);
-
-      // If this is a browser_navigate command, hide the tab list and show simple allow/reject
-      if (params.get('newTab') === 'true') {
-        setNewTab(true);
-        setShowTabList(false);
-      } else {
-        await loadTabs();
-      }
+      await handleConnectToTab();
     };
     void runAsync();
   }, []);
