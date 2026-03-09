@@ -15,6 +15,7 @@
  */
 
 import { RelayConnection, debugLog } from './relayConnection';
+import * as tabRegistry from './tabRegistry';
 
 type PageMessage = {
   type: 'connectToMCPRelay';
@@ -43,6 +44,12 @@ class TabShareExtension {
     chrome.tabs.onActivated.addListener(this._onTabActivated.bind(this));
     chrome.runtime.onMessage.addListener(this._onMessage.bind(this));
     chrome.action.onClicked.addListener(this._onActionClicked.bind(this));
+    chrome.debugger.onDetach.addListener((source, reason) => {
+      if (source.tabId)
+        tabRegistry.onDebuggerDetach(source.tabId, reason);
+    });
+    // Reconcile registry on service worker restart
+    tabRegistry.reconcile().catch(e => debugLog('tabRegistry reconcile error:', e));
   }
 
   // Promise-based message handling is not supported in Chrome: https://issues.chromium.org/issues/40753031
@@ -90,10 +97,10 @@ class TabShareExtension {
       });
 
       const connection = new RelayConnection(socket);
+      connection.onregistrymessage = msg => tabRegistry.handleRegistryMessage(msg);
       connection.onclose = () => {
         debugLog('Connection closed');
         this._pendingTabSelection.delete(selectorTabId);
-        // TODO: show error in the selector tab?
       };
       this._pendingTabSelection.set(selectorTabId, { connection });
       debugLog(`Connected to MCP relay`);
@@ -120,6 +127,10 @@ class TabShareExtension {
       this._pendingTabSelection.delete(selectorTabId);
 
       this._activeConnection.setTabId(tabId);
+      chrome.tabs.get(tabId).then(
+          tab => tabRegistry.upsertOnAttach(tabId, windowId, { url: tab.url, title: tab.title }),
+          () => tabRegistry.upsertOnAttach(tabId, windowId, {}),
+      ).catch(e => debugLog('tabRegistry upsert error:', e));
       this._activeConnection.onclose = () => {
         debugLog('MCP connection closed');
         this._activeConnection = undefined;
@@ -160,6 +171,7 @@ class TabShareExtension {
   }
 
   private async _onTabRemoved(tabId: number): Promise<void> {
+    tabRegistry.onTabRemoved(tabId);
     const pendingConnection = this._pendingTabSelection.get(tabId)?.connection;
     if (pendingConnection) {
       this._pendingTabSelection.delete(tabId);
@@ -174,6 +186,7 @@ class TabShareExtension {
   }
 
   private _onTabActivated(activeInfo: chrome.tabs.TabActiveInfo) {
+    tabRegistry.onTabActivated(activeInfo.tabId);
     for (const [tabId, pending] of this._pendingTabSelection) {
       if (tabId === activeInfo.tabId) {
         if (pending.timerId) {
@@ -196,6 +209,7 @@ class TabShareExtension {
   }
 
   private _onTabUpdated(tabId: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) {
+    tabRegistry.onTabUpdated(tabId, changeInfo);
     if (this._connectedTabId === tabId)
       void this._setConnectedTabId(tabId);
   }

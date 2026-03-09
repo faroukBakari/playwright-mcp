@@ -46,6 +46,7 @@ export class RelayConnection {
   private _closed = false;
 
   onclose?: () => void;
+  onregistrymessage?: (message: any) => Promise<any>;
 
   constructor(ws: WebSocket) {
     this._debuggee = { };
@@ -110,17 +111,28 @@ export class RelayConnection {
   }
 
   private async _onMessageAsync(event: MessageEvent): Promise<void> {
-    let message: ProtocolCommand;
+    let parsed: any;
     try {
-      message = JSON.parse(event.data);
+      parsed = JSON.parse(event.data);
     } catch (error: any) {
       debugLog('Error parsing message:', error);
       this._sendError(-32700, `Error parsing message: ${error.message}`);
       return;
     }
 
-    debugLog('Received message:', message);
+    debugLog('Received message:', parsed);
 
+    // Route registry messages (type-based) separately from CDP protocol (id-based)
+    if (typeof parsed.type === 'string' && parsed.type.startsWith('registry:')) {
+      if (this.onregistrymessage) {
+        const result = await this.onregistrymessage(parsed);
+        if (result)
+          this._sendMessage(result);
+      }
+      return;
+    }
+
+    const message = parsed as ProtocolCommand;
     const response: ProtocolResponse = {
       id: message.id,
     };
