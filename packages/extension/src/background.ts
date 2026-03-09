@@ -16,6 +16,7 @@
 
 import { RelayConnection, debugLog } from './relayConnection';
 import * as tabRegistry from './tabRegistry';
+import * as debuggerManager from './debuggerManager';
 
 type PageMessage = {
   type: 'connectToMCPRelay';
@@ -44,9 +45,15 @@ class TabShareExtension {
     chrome.tabs.onActivated.addListener(this._onTabActivated.bind(this));
     chrome.runtime.onMessage.addListener(this._onMessage.bind(this));
     chrome.action.onClicked.addListener(this._onActionClicked.bind(this));
-    chrome.debugger.onDetach.addListener((source, reason) => {
-      if (source.tabId)
-        tabRegistry.onDebuggerDetach(source.tabId, reason);
+    // Debugger manager owns chrome.debugger.onDetach — handles registry
+    // updates, auto-reattach for transient detaches, and terminal callbacks.
+    debuggerManager.init((tabId, reason) => {
+      debugLog(`Terminal debugger detach for tab ${tabId}: ${reason}`);
+      if (this._connectedTabId === tabId) {
+        this._activeConnection?.close(`Debugger detached: ${reason}`);
+        this._activeConnection = undefined;
+        void this._setConnectedTabId(null);
+      }
     });
     // Reconcile registry on service worker restart
     tabRegistry.reconcile().catch(e => debugLog('tabRegistry reconcile error:', e));

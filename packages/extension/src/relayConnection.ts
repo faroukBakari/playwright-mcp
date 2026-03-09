@@ -40,7 +40,6 @@ export class RelayConnection {
   private _debuggee: chrome.debugger.Debuggee;
   private _ws: WebSocket;
   private _eventListener: (source: chrome.debugger.DebuggerSession, method: string, params: any) => void;
-  private _detachListener: (source: chrome.debugger.Debuggee, reason: string) => void;
   private _tabPromise: Promise<void>;
   private _tabPromiseResolve!: () => void;
   private _closed = false;
@@ -54,11 +53,10 @@ export class RelayConnection {
     this._ws = ws;
     this._ws.onmessage = this._onMessage.bind(this);
     this._ws.onclose = () => this._onClose();
-    // Store listeners for cleanup
+    // Store listener for cleanup. Debugger detach handling is owned by
+    // debuggerManager (not RelayConnection) to support auto-reattach.
     this._eventListener = this._onDebuggerEvent.bind(this);
-    this._detachListener = this._onDebuggerDetach.bind(this);
     chrome.debugger.onEvent.addListener(this._eventListener);
-    chrome.debugger.onDetach.addListener(this._detachListener);
   }
 
   // Either setTabId or close is called after creating the connection.
@@ -79,7 +77,6 @@ export class RelayConnection {
       return;
     this._closed = true;
     chrome.debugger.onEvent.removeListener(this._eventListener);
-    chrome.debugger.onDetach.removeListener(this._detachListener);
     chrome.debugger.detach(this._debuggee).catch(() => {});
     this.onclose?.();
   }
@@ -97,13 +94,6 @@ export class RelayConnection {
         params,
       },
     });
-  }
-
-  private _onDebuggerDetach(source: chrome.debugger.Debuggee, reason: string): void {
-    if (source.tabId !== this._debuggee.tabId)
-      return;
-    this.close(`Debugger detached: ${reason}`);
-    this._debuggee = { };
   }
 
   private _onMessage(event: MessageEvent): void {
