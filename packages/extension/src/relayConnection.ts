@@ -126,8 +126,12 @@ export class RelayConnection {
     if (typeof parsed.type === 'string' && parsed.type.startsWith('registry:')) {
       if (this.onregistrymessage) {
         const result = await this.onregistrymessage(parsed);
-        if (result)
+        if (result) {
+          // Echo _callbackId for sideband HTTP response routing
+          if (parsed._callbackId)
+            result._callbackId = parsed._callbackId;
           this._sendMessage(result);
+        }
       }
       return;
     }
