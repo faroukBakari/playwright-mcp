@@ -19,6 +19,8 @@
     "build": "tsc --project . && tsc --project tsconfig.ui.json && vite build && vite build --config vite.sw.config.mts",
     "watch": "tsc --watch --project . & tsc --watch --project tsconfig.ui.json & vite build --watch & vite build --watch --config vite.sw.config.mts",
     "test": "playwright test",
+    "test:unit": "vitest run",
+    "test:unit:watch": "vitest",
     "lint": "tsc --project .",
     "clean": "rm -rf dist"
   },
@@ -32,6 +34,7 @@
     "react-dom": "^18.2.0",
     "typescript": "^5.8.2",
     "vite": "^7.3.1",
-    "vite-plugin-static-copy": "^3.1.1"
+    "vite-plugin-static-copy": "^3.1.1",
+    "vitest": "^4.0.18"
   }
 }
