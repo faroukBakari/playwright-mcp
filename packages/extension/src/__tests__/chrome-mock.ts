@@ -37,7 +37,6 @@ let tabStore: Map<number, chrome.tabs.Tab> = new Map();
 
 export function seedTab(tab: Partial<chrome.tabs.Tab> & { id: number }): void {
   tabStore.set(tab.id, {
-    id: tab.id,
     index: tab.index ?? 0,
     pinned: tab.pinned ?? false,
     highlighted: tab.highlighted ?? false,

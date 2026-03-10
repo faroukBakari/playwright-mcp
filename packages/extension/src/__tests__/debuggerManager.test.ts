@@ -23,7 +23,7 @@ describe('debuggerManager', () => {
 
   beforeEach(() => {
     terminalCallback = vi.fn();
-    debuggerManager.init(terminalCallback);
+    debuggerManager.init(terminalCallback as unknown as (tabId: number, reason: string) => void);
   });
 
   describe('terminal detach reasons', () => {
