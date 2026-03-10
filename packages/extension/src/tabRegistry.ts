@@ -84,6 +84,10 @@ export async function onTabRemoved(tabId: number): Promise<void> {
   debugLog('tabRegistry: removed', tabId);
 }
 
+// NOTE: Chrome fires tabs.onUpdated incrementally — url arrives before title.
+// During in-tab navigation, the registry has the new URL but stale title for
+// ~50-500ms until the HTML <title> is parsed. This is inherent to Chrome's
+// event model and accepted as cosmetic. See titleLag.test.ts for characterization.
 export async function onTabUpdated(tabId: number, changeInfo: chrome.tabs.TabChangeInfo): Promise<void> {
   const registry = await load();
   const entry = registry[String(tabId)];
