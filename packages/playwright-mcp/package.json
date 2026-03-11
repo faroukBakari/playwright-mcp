@@ -22,7 +22,11 @@
     "wtest": "playwright test --project=webkit",
     "dtest": "MCP_IN_DOCKER=1 playwright test --project=chromium-docker",
     "build": "echo OK",
+    "test:unit": "vitest run",
     "npm-publish": "npm run lint && npm run test && npm publish"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.18"
   },
   "exports": {
     "./package.json": "./package.json",
