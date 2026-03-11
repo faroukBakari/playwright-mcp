@@ -40,7 +40,7 @@ afterEach(() => {
 });
 
 describe('defaultConfig.performance', () => {
-  it('has all 7 fields with correct default values', () => {
+  it('has all 11 fields with correct default values', () => {
     expect(defaultConfig.performance).toEqual({
       postActionDelay: 100,
       postSettlementDelay: 10,
@@ -49,6 +49,10 @@ describe('defaultConfig.performance', () => {
       navigationLoadTimeout: 5000,
       postNavigateLoadState: 'domcontentloaded',
       postNavigateLoadTimeout: 3000,
+      waitFastPollInterval: 200,
+      waitFastPollRetries: 5,
+      waitDefaultTimeout: 3000,
+      waitMaxTimeout: 30000,
     });
   });
 });
@@ -66,6 +70,10 @@ describe('mergeConfig performance', () => {
       navigationLoadTimeout: 5000,
       postNavigateLoadState: 'domcontentloaded',
       postNavigateLoadTimeout: 3000,
+      waitFastPollInterval: 200,
+      waitFastPollRetries: 5,
+      waitDefaultTimeout: 3000,
+      waitMaxTimeout: 30000,
     });
   });
 
