@@ -137,6 +137,77 @@ describe('nullPerfLog', () => {
   });
 });
 
+describe('callId tracking', () => {
+  it('stamps callId on entries when set', async () => {
+    const log = new PerfLog(tmpDir);
+    log.setCallId('call-abc-123');
+    await log.timeAsync(
+      { phase: 'tool', step: 'e2e', side: 'server', target_ms: 0 },
+      async () => {},
+    );
+    await closeAndFlush(log);
+
+    const files = fs.readdirSync(tmpDir);
+    const entry = JSON.parse(fs.readFileSync(path.join(tmpDir, files[0]), 'utf8').trim());
+    expect(entry.callId).toBe('call-abc-123');
+  });
+
+  it('callId is undefined when not set', async () => {
+    const log = new PerfLog(tmpDir);
+    await log.timeAsync(
+      { phase: 'test', step: 'no-call', side: 'server', target_ms: 0 },
+      async () => {},
+    );
+    await closeAndFlush(log);
+
+    const files = fs.readdirSync(tmpDir);
+    const entry = JSON.parse(fs.readFileSync(path.join(tmpDir, files[0]), 'utf8').trim());
+    expect(entry.callId).toBeUndefined();
+  });
+
+  it('setCallId(undefined) clears the field', async () => {
+    const log = new PerfLog(tmpDir);
+    log.setCallId('call-xyz');
+    await log.timeAsync(
+      { phase: 'test', step: 'with-id', side: 'server', target_ms: 0 },
+      async () => {},
+    );
+    log.setCallId(undefined);
+    await log.timeAsync(
+      { phase: 'test', step: 'without-id', side: 'server', target_ms: 0 },
+      async () => {},
+    );
+    await closeAndFlush(log);
+
+    const files = fs.readdirSync(tmpDir);
+    const lines = fs.readFileSync(path.join(tmpDir, files[0]), 'utf8').trim().split('\n');
+    expect(lines).toHaveLength(2);
+    const first = JSON.parse(lines[0]);
+    const second = JSON.parse(lines[1]);
+    expect(first.callId).toBe('call-xyz');
+    expect(second.callId).toBeUndefined();
+  });
+
+  it('callId persists across multiple timeAsync calls within same set', async () => {
+    const log = new PerfLog(tmpDir);
+    log.setCallId('call-persist');
+    for (let i = 0; i < 3; i++) {
+      await log.timeAsync(
+        { phase: 'test', step: `phase-${i}`, side: 'server', target_ms: 0 },
+        async () => {},
+      );
+    }
+    await closeAndFlush(log);
+
+    const files = fs.readdirSync(tmpDir);
+    const lines = fs.readFileSync(path.join(tmpDir, files[0]), 'utf8').trim().split('\n');
+    expect(lines).toHaveLength(3);
+    for (const line of lines) {
+      expect(JSON.parse(line).callId).toBe('call-persist');
+    }
+  });
+});
+
 describe('createPerfLog', () => {
   it('creates correct directory structure', async () => {
     const log = createPerfLog(tmpDir);
