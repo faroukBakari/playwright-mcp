@@ -94,6 +94,22 @@ const ConnectApp: React.FC = () => {
       // Original flow: token match → auto-connect, invalid token → reject,
       // no token → manual approval UI. Now: always auto-connect.
       await connectToMCPRelay(relayUrl);
+
+      // Reconnect bypass: skip tab selection UI, reattach to known tab
+      const reconnect = params.get('reconnect') === 'true';
+      const tabIdParam = params.get('tabId');
+      if (reconnect && tabIdParam) {
+        const tabId = parseInt(tabIdParam, 10);
+        try {
+          const tab = await chrome.tabs.get(tabId);
+          await handleConnectToTab({ id: tabId, windowId: tab.windowId } as TabInfo);
+        } catch {
+          // Tab no longer exists — fall through to normal flow
+          await handleConnectToTab();
+        }
+        return;
+      }
+
       await handleConnectToTab();
     };
     void runAsync();

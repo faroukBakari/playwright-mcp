@@ -142,12 +142,18 @@ export class RelayConnection {
 
   private async _handleCommand(message: ProtocolCommand): Promise<any> {
     if (message.method === 'attachToTab') {
+      // If tabId is provided (reconnection), update debuggee and resolve tab promise
+      if (message.params?.tabId && this._debuggee.tabId !== message.params.tabId) {
+        this._debuggee = { tabId: message.params.tabId };
+        this._tabPromiseResolve();
+      }
       await this._tabPromise;
       debugLog('Attaching debugger to tab:', this._debuggee);
       await chrome.debugger.attach(this._debuggee, '1.3');
       const result: any = await chrome.debugger.sendCommand(this._debuggee, 'Target.getTargetInfo');
       return {
         targetInfo: result?.targetInfo,
+        tabId: this._debuggee.tabId,
       };
     }
     if (!this._debuggee.tabId)
