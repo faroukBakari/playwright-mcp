@@ -14,13 +14,9 @@
  * limitations under the License.
  */
 
-export function debugLog(...args: unknown[]): void {
-  const enabled = true;
-  if (enabled) {
-    // eslint-disable-next-line no-console
-    console.log('[Extension]', ...args);
-  }
-}
+import { extLog, setSink, clearSink } from './extensionLog';
+import type { LogEntry } from './extensionLog';
+import { reattachPromise } from './debuggerManager';
 
 type ProtocolCommand = {
   id: number;
@@ -57,6 +53,8 @@ export class RelayConnection {
     // debuggerManager (not RelayConnection) to support auto-reattach.
     this._eventListener = this._onDebuggerEvent.bind(this);
     chrome.debugger.onEvent.addListener(this._eventListener);
+    // Wire extension log forwarding over this WS
+    setSink((entry: LogEntry) => this._sendLog(entry));
   }
 
   // Either setTabId or close is called after creating the connection.
@@ -76,6 +74,7 @@ export class RelayConnection {
     if (this._closed)
       return;
     this._closed = true;
+    clearSink();
     chrome.debugger.onEvent.removeListener(this._eventListener);
     chrome.debugger.detach(this._debuggee).catch(() => {});
     this.onclose?.();
@@ -84,7 +83,7 @@ export class RelayConnection {
   private _onDebuggerEvent(source: chrome.debugger.DebuggerSession, method: string, params: any): void {
     if (source.tabId !== this._debuggee.tabId)
       return;
-    debugLog('Forwarding CDP event:', method, params);
+    extLog('relay', 'Forwarding CDP event:', method, params);
     const sessionId = source.sessionId;
     this._sendMessage({
       method: 'forwardCDPEvent',
@@ -97,7 +96,7 @@ export class RelayConnection {
   }
 
   private _onMessage(event: MessageEvent): void {
-    this._onMessageAsync(event).catch(e => debugLog('Error handling message:', e));
+    this._onMessageAsync(event).catch(e => extLog('relay', 'Error handling message:', e));
   }
 
   private async _onMessageAsync(event: MessageEvent): Promise<void> {
@@ -105,12 +104,12 @@ export class RelayConnection {
     try {
       parsed = JSON.parse(event.data);
     } catch (error: any) {
-      debugLog('Error parsing message:', error);
+      extLog('relay', 'Error parsing message:', error);
       this._sendError(-32700, `Error parsing message: ${error.message}`);
       return;
     }
 
-    debugLog('Received message:', parsed);
+    extLog('relay', 'Received message:', parsed);
 
     // Route registry messages (type-based) separately from CDP protocol (id-based)
     if (typeof parsed.type === 'string' && parsed.type.startsWith('registry:')) {
@@ -133,10 +132,10 @@ export class RelayConnection {
     try {
       response.result = await this._handleCommand(message);
     } catch (error: any) {
-      debugLog('Error handling command:', error);
+      extLog('relay', 'Error handling command:', error);
       response.error = error.message;
     }
-    debugLog('Sending response:', response);
+    extLog('relay', 'Sending response:', response);
     this._sendMessage(response);
   }
 
@@ -148,7 +147,7 @@ export class RelayConnection {
         this._tabPromiseResolve();
       }
       await this._tabPromise;
-      debugLog('Attaching debugger to tab:', this._debuggee);
+      extLog('relay', 'Attaching debugger to tab:', this._debuggee);
       await chrome.debugger.attach(this._debuggee, '1.3');
       const result: any = await chrome.debugger.sendCommand(this._debuggee, 'Target.getTargetInfo');
       return {
@@ -160,17 +159,25 @@ export class RelayConnection {
       throw new Error('No tab is connected. Please go to the Playwright MCP extension and select the tab you want to connect to.');
     if (message.method === 'forwardCDPCommand') {
       const { sessionId, method, params } = message.params;
-      debugLog('CDP command:', method, params);
+      extLog('relay', 'CDP command:', method, params);
       const debuggerSession: chrome.debugger.DebuggerSession = {
         ...this._debuggee,
         sessionId,
       };
-      // Forward CDP command to chrome.debugger
-      return await chrome.debugger.sendCommand(
-          debuggerSession,
-          method,
-          params
-      );
+      // Forward CDP command to chrome.debugger, with retry on security-induced detach
+      try {
+        return await chrome.debugger.sendCommand(debuggerSession, method, params);
+      } catch (error: any) {
+        const pending = reattachPromise();
+        if (!pending)
+          throw error;
+        extLog('relay', `CDP command failed during reattach, awaiting debugger recovery: ${method}`);
+        const success = await pending;
+        if (!success)
+          throw error;
+        extLog('relay', `Retrying CDP command after reattach: ${method}`);
+        return await chrome.debugger.sendCommand(debuggerSession, method, params);
+      }
     }
   }
 
@@ -181,6 +188,13 @@ export class RelayConnection {
         message,
       },
     });
+  }
+
+  private _sendLog(entry: LogEntry): boolean {
+    if (this._ws.readyState !== WebSocket.OPEN)
+      return false;
+    this._ws.send(JSON.stringify(entry));
+    return true;
   }
 
   private _sendMessage(message: any): void {

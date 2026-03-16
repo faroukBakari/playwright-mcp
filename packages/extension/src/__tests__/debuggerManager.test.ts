@@ -93,6 +93,65 @@ describe('debuggerManager', () => {
     });
   });
 
+  describe('security-induced detach (target_closed + tab alive)', () => {
+    it('reattaches when tab is still alive after target_closed', async () => {
+      await tabRegistry.upsertOnAttach(42, 1, { url: 'https://x.com' });
+      seedTab({ id: 42, url: 'https://x.com', title: 'Test', windowId: 1 });
+
+      const handler = getDetachHandler();
+      handler({ tabId: 42 }, 'target_closed');
+
+      // Should NOT fire terminal callback — tab is alive
+      await vi.waitFor(() => {
+        expect(chrome.debugger.attach).toHaveBeenCalledWith({ tabId: 42 }, '1.3');
+      }, { timeout: 2000 });
+
+      expect(terminalCallback).not.toHaveBeenCalled();
+
+      // Registry should show tab as re-attached
+      const all = await tabRegistry.getAll();
+      expect(all[0]?.debugger.attached).toBe(true);
+    });
+
+    it('falls through to terminal when security reattach fails', async () => {
+      await tabRegistry.upsertOnAttach(42, 1, { url: 'https://x.com' });
+      seedTab({ id: 42, url: 'https://x.com', title: 'Test' });
+
+      // Reattach fails (e.g., Kaspersky is still holding the debugger)
+      (chrome.debugger.attach as any).mockRejectedValue(new Error('Cannot attach'));
+
+      const handler = getDetachHandler();
+      handler({ tabId: 42 }, 'target_closed');
+
+      await vi.waitFor(() => {
+        expect(terminalCallback).toHaveBeenCalledWith(42, 'target_closed');
+      }, { timeout: 2000 });
+    });
+
+    it('exposes reattachPromise during security-induced reattach', async () => {
+      await tabRegistry.upsertOnAttach(42, 1, { url: 'https://x.com' });
+      seedTab({ id: 42, url: 'https://x.com', title: 'Test', windowId: 1 });
+
+      // No reattach in progress yet
+      expect(debuggerManager.reattachPromise()).toBeNull();
+
+      const handler = getDetachHandler();
+      handler({ tabId: 42 }, 'target_closed');
+
+      // Promise should be available during the debounce window
+      // (allow a tick for the async handleTargetClosed to start)
+      await vi.waitFor(() => {
+        expect(debuggerManager.reattachPromise()).not.toBeNull();
+      }, { timeout: 100 });
+
+      const result = await debuggerManager.reattachPromise()!;
+      expect(result).toBe(true);
+
+      // After resolution, promise should be cleared
+      expect(debuggerManager.reattachPromise()).toBeNull();
+    });
+  });
+
   describe('transient detach (reattach)', () => {
     it('attempts reattach on unknown reason', async () => {
       await tabRegistry.upsertOnAttach(42, 1, { url: 'https://x.com' });

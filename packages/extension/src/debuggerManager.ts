@@ -8,18 +8,23 @@
  * because the target { tabId } hasn't changed.
  *
  * Decision matrix:
- *   target_closed           → remove from registry, terminal
- *   canceled_by_user        → mark detached, terminal (user opened DevTools)
- *   replaced_with_devtools  → delayed-terminal: one-shot reattach after 1s
- *                             (recovers from antivirus/extension interference;
- *                              falls through to terminal if reattach fails)
- *   any other               → reattach with exponential backoff (max 3 attempts)
+ *   target_closed + tab gone   → remove from registry, terminal
+ *   target_closed + tab alive  → security-induced detach (e.g., Kaspersky
+ *                                injected a chrome-extension:// iframe).
+ *                                Debounce 500ms, reattach, retry in-flight
+ *                                commands. RelayConnection awaits
+ *                                reattachPromise() to hold & retry commands.
+ *   canceled_by_user           → mark detached, terminal (user opened DevTools)
+ *   replaced_with_devtools     → delayed-terminal: one-shot reattach after 1s
+ *                                (recovers from antivirus/extension interference;
+ *                                 falls through to terminal if reattach fails)
+ *   any other                  → reattach with exponential backoff (max 3 attempts)
  *
  * Wired in background.ts. Owns the chrome.debugger.onDetach listener
  * (RelayConnection's listener is removed to prevent premature WS closure).
  */
 
-import { debugLog } from './relayConnection';
+import { extLog } from './extensionLog';
 import * as tabRegistry from './tabRegistry';
 
 type TerminalDetachCallback = (tabId: number, reason: string) => void;
@@ -39,8 +44,23 @@ const DELAYED_TERMINAL_REASONS = new Set([
 ]);
 
 const DELAYED_REATTACH_MS = 1000;
+const SECURITY_DETACH_DEBOUNCE_MS = 500;
 
 let _onTerminalDetach: TerminalDetachCallback | undefined;
+
+// Shared reattach promise — RelayConnection awaits this to hold & retry
+// in-flight CDP commands during security-induced detaches.
+let _reattachResolve: ((success: boolean) => void) | null = null;
+let _reattachPromise: Promise<boolean> | null = null;
+
+/**
+ * Returns a promise that resolves to true when debugger reattach succeeds,
+ * or false when it fails. Returns null when no reattach is in progress.
+ * RelayConnection uses this to decide whether to retry failed CDP commands.
+ */
+export function reattachPromise(): Promise<boolean> | null {
+  return _reattachPromise;
+}
 
 /**
  * Initialize the debugger manager. Must be called once from background.ts.
@@ -58,15 +78,16 @@ function handleDetach(source: chrome.debugger.Debuggee, reason: string): void {
   if (!tabId)
     return;
 
-  debugLog(`debuggerManager: detach event for tab ${tabId}, reason: ${reason}`);
+  extLog('debugger',`debuggerManager: detach event for tab ${tabId}, reason: ${reason}`);
 
   // Always update registry first
   tabRegistry.onDebuggerDetach(tabId, reason);
 
   if (reason === 'target_closed') {
-    // Tab is gone — nothing to reattach to
-    tabRegistry.removeTab(tabId);
-    _onTerminalDetach?.(tabId, reason);
+    // Check if the tab is actually gone, or if a security product (e.g.,
+    // Kaspersky) caused Chrome to detach by injecting a chrome-extension://
+    // iframe. Chrome reports this as target_closed even though the tab is alive.
+    void handleTargetClosed(tabId);
     return;
   }
 
@@ -88,22 +109,59 @@ function handleDetach(source: chrome.debugger.Debuggee, reason: string): void {
   void attemptReattach(tabId, 0);
 }
 
+async function handleTargetClosed(tabId: number): Promise<void> {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab) {
+    // Tab is genuinely gone — terminal
+    extLog('debugger', `debuggerManager: tab ${tabId} confirmed closed — terminal`);
+    tabRegistry.removeTab(tabId);
+    _onTerminalDetach?.(tabId, 'target_closed');
+    return;
+  }
+
+  // Tab is alive — security-induced detach (Kaspersky iframe injection, etc.)
+  // Create a shared promise so RelayConnection can hold & retry in-flight commands.
+  extLog('debugger', `debuggerManager: tab ${tabId} still alive — security-induced detach, reattaching in ${SECURITY_DETACH_DEBOUNCE_MS}ms`);
+  _reattachPromise = new Promise<boolean>(resolve => { _reattachResolve = resolve; });
+
+  await new Promise(resolve => setTimeout(resolve, SECURITY_DETACH_DEBOUNCE_MS));
+
+  try {
+    await chrome.debugger.attach({ tabId }, '1.3');
+    extLog('debugger', `debuggerManager: security-detach reattach succeeded for tab ${tabId}`);
+    const freshTab = await chrome.tabs.get(tabId).catch(() => null);
+    await tabRegistry.upsertOnAttach(tabId, freshTab?.windowId ?? 0, {
+      url: freshTab?.url,
+      title: freshTab?.title,
+    });
+    _reattachResolve?.(true);
+  } catch (error: any) {
+    extLog('debugger', `debuggerManager: security-detach reattach failed for tab ${tabId}: ${error.message} — terminal`);
+    _reattachResolve?.(false);
+    tabRegistry.removeTab(tabId);
+    _onTerminalDetach?.(tabId, 'target_closed');
+  } finally {
+    _reattachPromise = null;
+    _reattachResolve = null;
+  }
+}
+
 async function attemptReattach(tabId: number, attempt: number): Promise<void> {
   if (attempt >= MAX_RETRIES) {
-    debugLog(`debuggerManager: reattach failed after ${MAX_RETRIES} attempts for tab ${tabId}`);
+    extLog('debugger',`debuggerManager: reattach failed after ${MAX_RETRIES} attempts for tab ${tabId}`);
     _onTerminalDetach?.(tabId, 'reattach_exhausted');
     return;
   }
 
   // Exponential backoff with jitter: base * 2^attempt * [0.5, 1.0)
   const delay = BASE_DELAY_MS * Math.pow(2, attempt) * (0.5 + Math.random() * 0.5);
-  debugLog(`debuggerManager: reattach attempt ${attempt + 1}/${MAX_RETRIES} for tab ${tabId} in ${Math.round(delay)}ms`);
+  extLog('debugger',`debuggerManager: reattach attempt ${attempt + 1}/${MAX_RETRIES} for tab ${tabId} in ${Math.round(delay)}ms`);
 
   await new Promise(resolve => setTimeout(resolve, delay));
 
   try {
     await chrome.debugger.attach({ tabId }, '1.3');
-    debugLog(`debuggerManager: reattached to tab ${tabId}`);
+    extLog('debugger',`debuggerManager: reattached to tab ${tabId}`);
     // Update registry with fresh tab info
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     await tabRegistry.upsertOnAttach(tabId, tab?.windowId ?? 0, {
@@ -111,25 +169,25 @@ async function attemptReattach(tabId: number, attempt: number): Promise<void> {
       title: tab?.title,
     });
   } catch (error: any) {
-    debugLog(`debuggerManager: reattach attempt ${attempt + 1} failed: ${error.message}`);
+    extLog('debugger',`debuggerManager: reattach attempt ${attempt + 1} failed: ${error.message}`);
     await attemptReattach(tabId, attempt + 1);
   }
 }
 
 async function attemptDelayedReattach(tabId: number, originalReason: string): Promise<void> {
-  debugLog(`debuggerManager: delayed reattach for tab ${tabId} (reason: ${originalReason}) in ${DELAYED_REATTACH_MS}ms`);
+  extLog('debugger',`debuggerManager: delayed reattach for tab ${tabId} (reason: ${originalReason}) in ${DELAYED_REATTACH_MS}ms`);
   await new Promise(resolve => setTimeout(resolve, DELAYED_REATTACH_MS));
 
   try {
     await chrome.debugger.attach({ tabId }, '1.3');
-    debugLog(`debuggerManager: delayed reattach succeeded for tab ${tabId} — recovered from transient ${originalReason}`);
+    extLog('debugger',`debuggerManager: delayed reattach succeeded for tab ${tabId} — recovered from transient ${originalReason}`);
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     await tabRegistry.upsertOnAttach(tabId, tab?.windowId ?? 0, {
       url: tab?.url,
       title: tab?.title,
     });
   } catch (error: any) {
-    debugLog(`debuggerManager: delayed reattach failed for tab ${tabId}: ${error.message} — treating as terminal`);
+    extLog('debugger',`debuggerManager: delayed reattach failed for tab ${tabId}: ${error.message} — treating as terminal`);
     _onTerminalDetach?.(tabId, originalReason);
   }
 }

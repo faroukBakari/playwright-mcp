@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-import { RelayConnection, debugLog } from './relayConnection';
+import { RelayConnection } from './relayConnection';
+import { extLog } from './extensionLog';
 import * as tabRegistry from './tabRegistry';
 import * as debuggerManager from './debuggerManager';
 
@@ -48,7 +49,7 @@ class TabShareExtension {
     // Debugger manager owns chrome.debugger.onDetach — handles registry
     // updates, auto-reattach for transient detaches, and terminal callbacks.
     debuggerManager.init((tabId, reason) => {
-      debugLog(`Terminal debugger detach for tab ${tabId}: ${reason}`);
+      extLog('lifecycle',`Terminal debugger detach for tab ${tabId}: ${reason}`);
       if (this._connectedTabId === tabId) {
         this._activeConnection?.close(`Debugger detached: ${reason}`);
         this._activeConnection = undefined;
@@ -56,7 +57,7 @@ class TabShareExtension {
       }
     });
     // Reconcile registry on service worker restart
-    tabRegistry.reconcile().catch(e => debugLog('tabRegistry reconcile error:', e));
+    tabRegistry.reconcile().catch(e => extLog('lifecycle','tabRegistry reconcile error:', e));
   }
 
   // Promise-based message handling is not supported in Chrome: https://issues.chromium.org/issues/40753031
@@ -95,7 +96,7 @@ class TabShareExtension {
 
   private async _connectToRelay(selectorTabId: number, mcpRelayUrl: string): Promise<void> {
     try {
-      debugLog(`Connecting to relay at ${mcpRelayUrl}`);
+      extLog('lifecycle',`Connecting to relay at ${mcpRelayUrl}`);
       const socket = new WebSocket(mcpRelayUrl);
       await new Promise<void>((resolve, reject) => {
         socket.onopen = () => resolve();
@@ -106,25 +107,25 @@ class TabShareExtension {
       const connection = new RelayConnection(socket);
       connection.onregistrymessage = msg => tabRegistry.handleRegistryMessage(msg);
       connection.onclose = () => {
-        debugLog('Connection closed');
+        extLog('lifecycle','Connection closed');
         this._pendingTabSelection.delete(selectorTabId);
       };
       this._pendingTabSelection.set(selectorTabId, { connection });
-      debugLog(`Connected to MCP relay`);
+      extLog('lifecycle',`Connected to MCP relay`);
     } catch (error: any) {
       const message = `Failed to connect to MCP relay: ${error.message}`;
-      debugLog(message);
+      extLog('lifecycle',message);
       throw new Error(message);
     }
   }
 
   private async _connectTab(selectorTabId: number, tabId: number, windowId: number, mcpRelayUrl: string): Promise<void> {
     try {
-      debugLog(`Connecting tab ${tabId} to relay at ${mcpRelayUrl}`);
+      extLog('lifecycle',`Connecting tab ${tabId} to relay at ${mcpRelayUrl}`);
       try {
         this._activeConnection?.close('Another connection is requested');
       } catch (error: any) {
-        debugLog(`Error closing active connection:`, error);
+        extLog('lifecycle',`Error closing active connection:`, error);
       }
       await this._setConnectedTabId(null);
 
@@ -137,9 +138,9 @@ class TabShareExtension {
       chrome.tabs.get(tabId).then(
           tab => tabRegistry.upsertOnAttach(tabId, windowId, { url: tab.url, title: tab.title }),
           () => tabRegistry.upsertOnAttach(tabId, windowId, {}),
-      ).catch(e => debugLog('tabRegistry upsert error:', e));
+      ).catch(e => extLog('lifecycle','tabRegistry upsert error:', e));
       this._activeConnection.onclose = () => {
-        debugLog('MCP connection closed');
+        extLog('lifecycle','MCP connection closed');
         this._activeConnection = undefined;
         void this._setConnectedTabId(null);
       };
@@ -149,10 +150,10 @@ class TabShareExtension {
         chrome.tabs.update(tabId, { active: true }),
         chrome.windows.update(windowId, { focused: true }),
       ]);
-      debugLog(`Connected to MCP bridge`);
+      extLog('lifecycle',`Connected to MCP bridge`);
     } catch (error: any) {
       await this._setConnectedTabId(null);
-      debugLog(`Failed to connect tab ${tabId}:`, error.message);
+      extLog('lifecycle',`Failed to connect tab ${tabId}:`, error.message);
       throw error;
     }
   }

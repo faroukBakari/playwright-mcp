@@ -8,7 +8,7 @@
  * Protocol: responds to relay WS messages (registry:list, registry:focus).
  */
 
-import { debugLog } from './relayConnection';
+import { extLog } from './extensionLog';
 
 export interface TabEntry {
   tabId: number;
@@ -56,7 +56,7 @@ export async function upsertOnAttach(tabId: number, windowId: number, tabInfo: {
     lastSeen: Date.now(),
   };
   await save(registry);
-  debugLog('tabRegistry: upsert on attach', tabId);
+  extLog('registry','tabRegistry: upsert on attach', tabId);
 }
 
 export async function getAll(): Promise<TabEntry[]> {
@@ -81,7 +81,7 @@ export async function removeTab(tabId: number): Promise<void> {
 
 export async function onTabRemoved(tabId: number): Promise<void> {
   await removeTab(tabId);
-  debugLog('tabRegistry: removed', tabId);
+  extLog('registry','tabRegistry: removed', tabId);
 }
 
 // NOTE: Chrome fires tabs.onUpdated incrementally — url arrives before title.
@@ -114,7 +114,7 @@ export async function onDebuggerDetach(tabId: number, reason: string): Promise<v
   entry.debugger.attached = false;
   entry.debugger.lastDetachReason = reason;
   await save(registry);
-  debugLog('tabRegistry: debugger detached', tabId, reason);
+  extLog('registry','tabRegistry: debugger detached', tabId, reason);
 }
 
 // --- Service worker restart reconciliation ---
@@ -147,7 +147,7 @@ export async function reconcile(): Promise<void> {
 
   if (changed) {
     await save(registry);
-    debugLog('tabRegistry: reconciled', Object.keys(registry).length, 'entries');
+    extLog('registry','tabRegistry: reconciled', Object.keys(registry).length, 'entries');
   }
 }
 
