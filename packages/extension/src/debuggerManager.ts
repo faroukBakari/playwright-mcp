@@ -10,7 +10,9 @@
  * Decision matrix:
  *   target_closed           → remove from registry, terminal
  *   canceled_by_user        → mark detached, terminal (user opened DevTools)
- *   replaced_with_devtools  → mark detached, terminal (same as above)
+ *   replaced_with_devtools  → delayed-terminal: one-shot reattach after 1s
+ *                             (recovers from antivirus/extension interference;
+ *                              falls through to terminal if reattach fails)
  *   any other               → reattach with exponential backoff (max 3 attempts)
  *
  * Wired in background.ts. Owns the chrome.debugger.onDetach listener
@@ -27,8 +29,16 @@ const BASE_DELAY_MS = 500;
 
 const TERMINAL_REASONS = new Set([
   'canceled_by_user',
+]);
+
+// Delayed-terminal: one-shot reattach attempt after a delay. If reattach
+// succeeds, the detach was transient (e.g., Kaspersky grabbed the debugger
+// briefly). If it fails, proceed with terminal teardown.
+const DELAYED_TERMINAL_REASONS = new Set([
   'replaced_with_devtools',
 ]);
+
+const DELAYED_REATTACH_MS = 1000;
 
 let _onTerminalDetach: TerminalDetachCallback | undefined;
 
@@ -66,6 +76,14 @@ function handleDetach(source: chrome.debugger.Debuggee, reason: string): void {
     return;
   }
 
+  if (DELAYED_TERMINAL_REASONS.has(reason)) {
+    // Could be DevTools (terminal) or antivirus/extension interference (transient).
+    // One-shot delayed reattach: if the interfering extension releases the debugger,
+    // reattach succeeds and we recover silently. If not, fall through to terminal.
+    void attemptDelayedReattach(tabId, reason);
+    return;
+  }
+
   // Transient detach — attempt reattach with backoff
   void attemptReattach(tabId, 0);
 }
@@ -95,5 +113,23 @@ async function attemptReattach(tabId: number, attempt: number): Promise<void> {
   } catch (error: any) {
     debugLog(`debuggerManager: reattach attempt ${attempt + 1} failed: ${error.message}`);
     await attemptReattach(tabId, attempt + 1);
+  }
+}
+
+async function attemptDelayedReattach(tabId: number, originalReason: string): Promise<void> {
+  debugLog(`debuggerManager: delayed reattach for tab ${tabId} (reason: ${originalReason}) in ${DELAYED_REATTACH_MS}ms`);
+  await new Promise(resolve => setTimeout(resolve, DELAYED_REATTACH_MS));
+
+  try {
+    await chrome.debugger.attach({ tabId }, '1.3');
+    debugLog(`debuggerManager: delayed reattach succeeded for tab ${tabId} — recovered from transient ${originalReason}`);
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    await tabRegistry.upsertOnAttach(tabId, tab?.windowId ?? 0, {
+      url: tab?.url,
+      title: tab?.title,
+    });
+  } catch (error: any) {
+    debugLog(`debuggerManager: delayed reattach failed for tab ${tabId}: ${error.message} — treating as terminal`);
+    _onTerminalDetach?.(tabId, originalReason);
   }
 }

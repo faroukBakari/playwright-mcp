@@ -187,7 +187,27 @@ describe('Session Recovery', () => {
     expect(res.status).toBe(404);
   });
 
-  it('session state file is deleted on session close', async () => {
+  it('GET /health returns 200 without creating a session', async () => {
+    const { port } = await createServer(createTestFactory());
+
+    const res = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      http.get(`http://localhost:${port}/health`, res => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => resolve({ status: res.statusCode!, body: data }));
+      }).on('error', reject);
+    });
+
+    expect(res.status).toBe(200);
+    const parsed = JSON.parse(res.body);
+    expect(parsed.status).toBe('ok');
+    expect(parsed.sessions).toBe(0);
+
+    // No session state file should exist — health check doesn't create sessions
+    expect(fs.existsSync(sessionStateFile())).toBe(false);
+  });
+
+  it('session state file survives session close (for recovery after restart)', async () => {
     const { port } = await createServer(createTestFactory());
 
     const initRes = await mcpPost(port, INIT_BODY);
@@ -201,6 +221,8 @@ describe('Session Recovery', () => {
 
     // Give the onclose handler a tick to fire
     await new Promise(r => setTimeout(r, 100));
-    expect(fs.existsSync(stateFile)).toBe(false);
+    // State file is NOT deleted — it must survive for stale session recovery.
+    // It is overwritten when a new session is created.
+    expect(fs.existsSync(stateFile)).toBe(true);
   });
 });

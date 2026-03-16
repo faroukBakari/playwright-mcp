@@ -54,16 +54,42 @@ describe('debuggerManager', () => {
       expect(chrome.debugger.attach).not.toHaveBeenCalled();
     });
 
-    it('replaced_with_devtools: fires terminal callback, no reattach', async () => {
+    it('replaced_with_devtools: attempts delayed reattach before terminal', async () => {
       await tabRegistry.upsertOnAttach(42, 1, {});
-      const handler = getDetachHandler();
+      seedTab({ id: 42, url: 'https://x.com', title: 'Test' });
 
+      // Make reattach fail (simulates real DevTools open)
+      (chrome.debugger.attach as any).mockRejectedValue(new Error('Another debugger is attached'));
+
+      const handler = getDetachHandler();
       handler({ tabId: 42 }, 'replaced_with_devtools');
+
+      // Should NOT fire terminal callback immediately
+      expect(terminalCallback).not.toHaveBeenCalled();
+
+      // After delayed reattach fails (~1s), terminal callback fires
       await vi.waitFor(() => {
         expect(terminalCallback).toHaveBeenCalledWith(42, 'replaced_with_devtools');
-      });
+      }, { timeout: 3000 });
 
-      expect(chrome.debugger.attach).not.toHaveBeenCalled();
+      // Should have attempted exactly one reattach
+      expect(chrome.debugger.attach).toHaveBeenCalledTimes(1);
+    });
+
+    it('replaced_with_devtools: recovers if reattach succeeds (antivirus interference)', async () => {
+      await tabRegistry.upsertOnAttach(42, 1, {});
+      seedTab({ id: 42, url: 'https://x.com', title: 'Test', windowId: 1 });
+
+      const handler = getDetachHandler();
+      handler({ tabId: 42 }, 'replaced_with_devtools');
+
+      // Reattach succeeds (default mock behavior) — Kaspersky released the debugger
+      await vi.waitFor(() => {
+        expect(chrome.debugger.attach).toHaveBeenCalledWith({ tabId: 42 }, '1.3');
+      }, { timeout: 3000 });
+
+      // Terminal callback should NOT have been called — recovered
+      expect(terminalCallback).not.toHaveBeenCalled();
     });
   });
 

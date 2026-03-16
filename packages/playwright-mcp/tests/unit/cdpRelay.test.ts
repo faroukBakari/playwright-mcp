@@ -20,7 +20,7 @@ class RelayTestHarness {
   async setup(options: CDPRelayOptions = { graceTTL: 50 }) {
     this.server = http.createServer();
     await new Promise<void>(resolve => this.server.listen(0, '127.0.0.1', resolve));
-    this.relay = new CDPRelayServer(this.server, 'chrome', undefined, undefined, options);
+    this.relay = new CDPRelayServer(this.server, 'chrome', options);
   }
 
   async teardown() {
