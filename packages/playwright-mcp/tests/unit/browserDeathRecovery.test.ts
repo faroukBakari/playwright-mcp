@@ -18,7 +18,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'events';
 
 import { installHttpTransport } from 'playwright-core/lib/mcp/sdk/http';
-import { createHttpServer } from 'playwright-core/lib/server/utils/network';
+import { createHttpServer, startHttpServer } from 'playwright-core/lib/server/utils/network';
+import { CDPRelayServer } from 'playwright-core/lib/mcp/cdpRelay';
 
 import type { ServerBackend, ServerBackendFactory } from 'playwright-core/lib/mcp/sdk/server';
 
@@ -396,5 +397,75 @@ describe('extension-mode browser re-creation', () => {
 
     const r2 = await backend2.callTool('any', {}, () => {});
     expect(r2.isError).toBeFalsy();
+  });
+});
+
+// ===================================================================
+// Group 3: CDPRelay respawn (no orphaned servers)
+// ===================================================================
+
+describe('CDPRelay respawn (no orphaned servers)', () => {
+  const relayServers: http.Server[] = [];
+
+  afterEach(async () => {
+    await Promise.all(relayServers.map(s => new Promise<void>(r => s.close(() => r()))));
+    relayServers.length = 0;
+  });
+
+  async function createRelay(): Promise<CDPRelayServer> {
+    const httpServer = createHttpServer();
+    await startHttpServer(httpServer, {});
+    relayServers.push(httpServer);
+    return new CDPRelayServer(httpServer, 'chrome');
+  }
+
+  it('prepareForReconnect resets connection state', async () => {
+    const relay = await createRelay();
+
+    // Set some state that would exist after a browser session
+    // Access private fields for testing via any cast
+    const r = relay as any;
+    r._connectedTabInfo = { targetInfo: { type: 'page' }, sessionId: 'pw-tab-1' };
+    r._nextSessionId = 5;
+    r._playwrightReconnectCount = 2;
+    r._graceBuffer = [{ data: 'event1', size: 12 }];
+    r._graceBufferBytes = 12;
+    r._lastTabId = 42;
+    r._lastTabUrl = 'https://example.com';
+
+    relay.prepareForReconnect();
+
+    // Connection state reset
+    expect(r._playwrightConnection).toBeNull();
+    expect(r._extensionConnection).toBeNull();
+    expect(r._connectedTabInfo).toBeUndefined();
+    expect(r._nextSessionId).toBe(1);
+    expect(r._playwrightReconnectCount).toBe(0);
+    expect(r._graceBuffer).toEqual([]);
+    expect(r._graceBufferBytes).toBe(0);
+    expect(relay.state).toBe('disconnected');
+
+    // Tab continuity preserved
+    expect(relay.lastTabId).toBe(42);
+    expect(relay.lastTabUrl).toBe('https://example.com');
+  });
+
+  it('prepareForReconnect is idempotent (safe on first call)', async () => {
+    const relay = await createRelay();
+
+    // Should not throw on a fresh relay with no connections
+    expect(() => relay.prepareForReconnect()).not.toThrow();
+    expect(relay.state).toBe('disconnected');
+  });
+
+  it('relay reuse — same CDP endpoint across reconnects', async () => {
+    const relay = await createRelay();
+    const endpointBefore = relay.cdpEndpoint();
+    const extensionEndpointBefore = relay.extensionEndpoint();
+
+    relay.prepareForReconnect();
+
+    expect(relay.cdpEndpoint()).toBe(endpointBefore);
+    expect(relay.extensionEndpoint()).toBe(extensionEndpointBefore);
   });
 });
