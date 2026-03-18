@@ -1,10 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 // Import tool arrays from compiled playwright-core
 // Default exports compile to .default in CJS
 import formModule from 'playwright-core/lib/tools/form';
 import navigateModule from 'playwright-core/lib/tools/navigate';
 import { resolveTimeout } from 'playwright-core/lib/tools/wait';
+import { Response } from 'playwright-core/lib/tools/response';
 
 const formTools: any[] = (formModule as any).default ?? formModule;
 const navigateTools: any[] = (navigateModule as any).default ?? navigateModule;
@@ -90,6 +91,53 @@ describe('browser_navigate_and_wait schema (Patch 3)', () => {
   it('does not duplicate browser_navigate', () => {
     const navigateTools_ = navigateTools.filter((t: any) => t.schema.name === 'browser_navigate');
     expect(navigateTools_).toHaveLength(1);
+  });
+});
+
+describe('browser_fill_form snapshot behavior', () => {
+  const fillForm = formTools.find((t: any) => t.schema.name === 'browser_fill_form');
+
+  function createStubs() {
+    const locator = {
+      fill: vi.fn().mockResolvedValue(undefined),
+      setChecked: vi.fn().mockResolvedValue(undefined),
+      selectOption: vi.fn().mockResolvedValue(undefined),
+      click: vi.fn().mockResolvedValue(undefined),
+    };
+    const tab = {
+      waitForCompletion: vi.fn().mockImplementation(async (fn: any) => fn()),
+      refLocator: vi.fn().mockResolvedValue({ locator, resolved: `getByRole('textbox', { name: 'Name' })` }),
+      context: { lookupSecret: (v: string) => ({ value: v, code: `'${v}'` }) },
+      actionTimeoutOptions: {},
+      modalStates: () => [],
+    };
+    const context = {
+      id: 'test-context-id',
+      ensureTab: vi.fn().mockResolvedValue(tab),
+      config: { snapshot: { mode: 'incremental' } },
+      options: { cwd: '/tmp' },
+      currentTab: () => undefined,
+      tabs: () => [],
+    };
+    const response = new Response(context as any, 'browser_fill_form', {});
+    return { context, tab, response };
+  }
+
+  it('calls setIncludeSnapshot after filling fields', async () => {
+    const { context, response } = createStubs();
+    await fillForm!.handle(context, {
+      fields: [{ name: 'Name', type: 'textbox', ref: 'e4', value: 'John' }],
+    }, response);
+    expect((response as any)._includeSnapshot).toBe('diff');
+  });
+
+  it('calls setIncludeSnapshot after filling + submit', async () => {
+    const { context, response } = createStubs();
+    await fillForm!.handle(context, {
+      fields: [{ name: 'Name', type: 'textbox', ref: 'e4', value: 'John' }],
+      submitRef: 'e10',
+    }, response);
+    expect((response as any)._includeSnapshot).toBe('diff');
   });
 });
 

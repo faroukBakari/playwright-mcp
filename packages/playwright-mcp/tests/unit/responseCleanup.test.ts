@@ -6,6 +6,7 @@ import { Response } from 'playwright-core/lib/tools/response';
 // Minimal context stub — same pattern as snapshotControl.test.ts
 function createStubContext(configOverrides: Record<string, any> = {}) {
   return {
+    id: 'test-context-id',
     config: { ...configOverrides },
     options: { cwd: '/tmp' },
     currentTab: () => undefined,

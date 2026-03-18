@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Import from compiled playwright-core (file: dependency)
 import { configFromEnv, mergeConfig, defaultConfig } from 'playwright-core/lib/mcp/config';
@@ -10,6 +10,7 @@ import { Response } from 'playwright-core/lib/tools/response';
 // tabs() returns []).
 function createStubContext(configOverrides: Record<string, any> = {}) {
   return {
+    id: 'test-context-id',
     config: { ...configOverrides },
     options: { cwd: '/tmp' },
     currentTab: () => undefined,
@@ -45,52 +46,158 @@ afterEach(() => {
 // Patch 4ab: Per-call includeSnapshot override (Response behavior)
 // ---------------------------------------------------------------------------
 
-describe('Response snapshotOverride', () => {
-  it('setIncludeSnapshot() is a no-op when snapshotOverride is false', () => {
+describe('Response snapshotMode suppression', () => {
+  it('setIncludeSnapshot() is a no-op when snapshotMode is none', () => {
     const ctx = createStubContext({ snapshot: { mode: 'incremental' } });
-    const response = new Response(ctx, 'browser_click', {}, undefined, false);
+    const response = new Response(ctx, 'browser_click', {}, undefined, undefined, 'none');
     response.setIncludeSnapshot();
-    // _includeSnapshot should remain 'none' because the override suppressed it
+    // _includeSnapshot should remain 'none' because the mode suppressed it
     expect((response as any)._includeSnapshot).toBe('none');
   });
 
-  it('setIncludeFullSnapshot() is a no-op when snapshotOverride is false', () => {
+  it('setIncludeSnapshot(full) is a no-op when snapshotMode is none', () => {
     const ctx = createStubContext();
-    const response = new Response(ctx, 'browser_snapshot', {}, undefined, false);
-    response.setIncludeFullSnapshot();
+    const response = new Response(ctx, 'browser_snapshot', {}, undefined, undefined, 'none');
+    response.setIncludeSnapshot('full');
     expect((response as any)._includeSnapshot).toBe('none');
   });
 
-  it('setIncludeSnapshot() works normally when snapshotOverride is undefined', () => {
+  it('setIncludeSnapshot() works normally when no snapshotMode is set', () => {
     const ctx = createStubContext({ snapshot: { mode: 'incremental' } });
     const response = new Response(ctx, 'browser_click', {});
     response.setIncludeSnapshot();
-    expect((response as any)._includeSnapshot).toBe('incremental');
+    expect((response as any)._includeSnapshot).toBe('diff');
   });
 
-  it('setIncludeFullSnapshot() works normally when snapshotOverride is undefined', () => {
+  it('setIncludeSnapshot(full) works normally when no snapshotMode is set', () => {
     const ctx = createStubContext();
     const response = new Response(ctx, 'browser_snapshot', {});
-    response.setIncludeFullSnapshot();
+    response.setIncludeSnapshot('full');
     expect((response as any)._includeSnapshot).toBe('full');
   });
 
-  it('setIncludeSnapshot() works normally when snapshotOverride is true', () => {
-    const ctx = createStubContext({ snapshot: { mode: 'full' } });
-    const response = new Response(ctx, 'browser_navigate', {}, undefined, true);
+  it('setIncludeSnapshot() uses snapshotMode full as fallback', () => {
+    const ctx = createStubContext({ snapshot: { mode: 'incremental' } });
+    const response = new Response(ctx, 'browser_navigate', {}, undefined, undefined, 'full');
     response.setIncludeSnapshot();
     expect((response as any)._includeSnapshot).toBe('full');
   });
 
-  it('snapshotOverride false produces no Snapshot section in serialized output', async () => {
+  it('snapshotMode none produces no Snapshot section in serialized output', async () => {
     const ctx = createStubContext({ snapshot: { mode: 'incremental' } });
-    const response = new Response(ctx, 'browser_click', {}, undefined, false);
+    const response = new Response(ctx, 'browser_click', {}, undefined, undefined, 'none');
     response.setIncludeSnapshot();
     response.addTextResult('Action completed');
     const result = await response.serialize();
     const text = (result.content[0] as any).text;
     expect(text).not.toContain('### Snapshot');
     expect(text).toContain('Action completed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Lazy snapshot capture: captureSnapshot() skipped when _includeSnapshot='none'
+// ---------------------------------------------------------------------------
+
+describe('captureSnapshot gated by _includeSnapshot', () => {
+  // Stub tab with a spy on captureSnapshot
+  function createMockTab() {
+    return {
+      captureSnapshot: vi.fn().mockResolvedValue({
+        ariaSnapshot: '- heading "Hello"',
+        ariaSnapshotDiff: undefined,
+        modalStates: [],
+        events: [],
+      }),
+      headerSnapshot: vi.fn().mockResolvedValue({
+        title: 'Test', url: 'https://example.com', current: true,
+        console: { total: 0, warnings: 0, errors: 0 }, changed: false,
+      }),
+    };
+  }
+
+  function createContextWithTab(mockTab: ReturnType<typeof createMockTab>, configOverrides: Record<string, any> = {}) {
+    return {
+      id: 'test-context-id',
+      config: { ...configOverrides },
+      options: { cwd: '/tmp' },
+      currentTab: () => mockTab,
+      currentTabOrDie: () => mockTab,
+      tabs: () => [mockTab],
+    } as any;
+  }
+
+  it('skips captureSnapshot when no setIncludeSnapshot is called (none)', async () => {
+    const tab = createMockTab();
+    const ctx = createContextWithTab(tab);
+    const response = new Response(ctx, 'browser_evaluate', {});
+    response.addTextResult('42');
+    await response.serialize();
+    expect(tab.captureSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('skips captureSnapshot when snapshotMode is none', async () => {
+    const tab = createMockTab();
+    const ctx = createContextWithTab(tab, { snapshot: { mode: 'incremental' } });
+    const response = new Response(ctx, 'browser_click', {}, undefined, undefined, 'none');
+    response.setIncludeSnapshot(); // suppressed by snapshotMode
+    response.addTextResult('Clicked');
+    await response.serialize();
+    expect(tab.captureSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('skips captureSnapshot when config snapshot mode is none', async () => {
+    const tab = createMockTab();
+    const ctx = createContextWithTab(tab, { snapshot: { mode: 'none' } });
+    const response = new Response(ctx, 'browser_click', {});
+    response.setIncludeSnapshot(); // resolves to 'none' from config
+    response.addTextResult('Clicked');
+    await response.serialize();
+    expect(tab.captureSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('calls captureSnapshot when _includeSnapshot is diff', async () => {
+    const tab = createMockTab();
+    const ctx = createContextWithTab(tab, { snapshot: { mode: 'incremental' } });
+    const response = new Response(ctx, 'browser_click', {});
+    response.setIncludeSnapshot();
+    response.addTextResult('Clicked');
+    await response.serialize();
+    expect(tab.captureSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it('calls captureSnapshot when _includeSnapshot is full', async () => {
+    const tab = createMockTab();
+    const ctx = createContextWithTab(tab);
+    const response = new Response(ctx, 'browser_snapshot', {});
+    response.setIncludeSnapshot('full');
+    await response.serialize();
+    expect(tab.captureSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it('passes snapshotSelector and clientId through to captureSnapshot', async () => {
+    const tab = createMockTab();
+    const ctx = createContextWithTab(tab, { snapshot: { mode: 'full' } });
+    const response = new Response(ctx, 'browser_click', {}, undefined, '.main-content');
+    response.setIncludeSnapshot();
+    await response.serialize();
+    expect(tab.captureSnapshot).toHaveBeenCalledWith('/tmp', { rootSelector: '.main-content', clientId: 'test-context-id' });
+  });
+
+  it('still renders tab headers when snapshot is skipped but header changed', async () => {
+    const tab = createMockTab();
+    tab.headerSnapshot.mockResolvedValue({
+      title: 'New Title', url: 'https://example.com/new', current: true,
+      console: { total: 0, warnings: 0, errors: 0 }, changed: true,
+    });
+    const ctx = createContextWithTab(tab);
+    const response = new Response(ctx, 'browser_evaluate', {});
+    response.addTextResult('done');
+    const result = await response.serialize();
+    const text = (result.content[0] as any).text;
+    expect(tab.captureSnapshot).not.toHaveBeenCalled();
+    expect(text).toContain('### Page');
+    expect(text).toContain('https://example.com/new');
   });
 });
 

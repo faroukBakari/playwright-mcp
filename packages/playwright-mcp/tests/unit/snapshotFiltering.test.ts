@@ -7,6 +7,7 @@ import { Response } from 'playwright-core/lib/tools/response';
 // Minimal context stub — matches pattern from snapshotControl.test.ts.
 function createStubContext(configOverrides: Record<string, any> = {}) {
   return {
+    id: 'test-context-id',
     config: { ...configOverrides },
     options: { cwd: '/tmp' },
     currentTab: () => undefined,
@@ -98,7 +99,7 @@ describe('mergeConfig snapshot.interactableOnly', () => {
 describe('Response snapshotSelector', () => {
   it('stores snapshotSelector from constructor', () => {
     const ctx = createStubContext({ snapshot: { mode: 'incremental' } });
-    const response = new Response(ctx, 'browser_click', {}, undefined, undefined, '#main-content');
+    const response = new Response(ctx, 'browser_click', {}, undefined, '#main-content');
     expect((response as any)._snapshotSelector).toBe('#main-content');
   });
 
