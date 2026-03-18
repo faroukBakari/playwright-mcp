@@ -98,9 +98,51 @@ describe('PerfLog', () => {
     await closeAndFlush(log);
 
     const files = fs.readdirSync(tmpDir);
+    const lines = fs.readFileSync(path.join(tmpDir, files[0]), 'utf8').trim().split('\n');
+    // First line is session-init from setSession, second is the timeAsync entry
+    const toolEntry = JSON.parse(lines[lines.length - 1]);
+    expect(toolEntry.sid).toBe('sess-123');
+    expect(toolEntry.tool).toBe('browser_click');
+  });
+
+  it('setSession writes a session-init entry', async () => {
+    const log = new PerfLog(tmpDir);
+    log.setSession('sess-abc');
+    await closeAndFlush(log);
+
+    const files = fs.readdirSync(tmpDir);
+    expect(files).toHaveLength(1);
     const entry = JSON.parse(fs.readFileSync(path.join(tmpDir, files[0]), 'utf8').trim());
-    expect(entry.sid).toBe('sess-123');
-    expect(entry.tool).toBe('browser_click');
+    expect(entry.phase).toBe('session');
+    expect(entry.step).toBe('init');
+    expect(entry.sid).toBe('sess-abc');
+    expect(entry.actual_ms).toBe(0);
+  });
+
+  it('setClientId stamps clientId on entries', async () => {
+    const log = new PerfLog(tmpDir);
+    log.setClientId('ctx-uuid-123');
+    await log.timeAsync(
+      { phase: 'test', step: 'check', side: 'server', target_ms: 0 },
+      async () => {},
+    );
+    await closeAndFlush(log);
+
+    const files = fs.readdirSync(tmpDir);
+    const entry = JSON.parse(fs.readFileSync(path.join(tmpDir, files[0]), 'utf8').trim());
+    expect(entry.clientId).toBe('ctx-uuid-123');
+  });
+
+  it('session-init entry includes clientId when set before setSession', async () => {
+    const log = new PerfLog(tmpDir);
+    log.setClientId('ctx-before');
+    log.setSession('sess-order');
+    await closeAndFlush(log);
+
+    const files = fs.readdirSync(tmpDir);
+    const entry = JSON.parse(fs.readFileSync(path.join(tmpDir, files[0]), 'utf8').trim());
+    expect(entry.phase).toBe('session');
+    expect(entry.clientId).toBe('ctx-before');
   });
 
   it('multiple timeAsync calls append to same file', async () => {
@@ -134,6 +176,12 @@ describe('nullPerfLog', () => {
       async () => 'passthrough',
     );
     expect(result).toBe('passthrough');
+  });
+
+  it('setSession and setClientId are no-ops', () => {
+    // Should not throw or write anything
+    nullPerfLog.setSession('should-not-write');
+    nullPerfLog.setClientId('should-not-write');
   });
 });
 

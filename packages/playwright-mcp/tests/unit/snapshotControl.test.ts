@@ -127,33 +127,41 @@ describe('captureSnapshot gated by _includeSnapshot', () => {
     } as any;
   }
 
-  it('skips captureSnapshot when no setIncludeSnapshot is called (none)', async () => {
+  it('captures snapshot for baseline even when no setIncludeSnapshot is called (none)', async () => {
     const tab = createMockTab();
     const ctx = createContextWithTab(tab);
     const response = new Response(ctx, 'browser_evaluate', {});
     response.addTextResult('42');
-    await response.serialize();
-    expect(tab.captureSnapshot).not.toHaveBeenCalled();
+    const result = await response.serialize();
+    // Always captures to advance baseline for future diffs
+    expect(tab.captureSnapshot).toHaveBeenCalled();
+    // But no Snapshot section in response when mode is 'none'
+    const text = (result.content[0] as any).text;
+    expect(text).not.toContain('### Snapshot');
   });
 
-  it('skips captureSnapshot when snapshotMode is none', async () => {
+  it('captures snapshot for baseline even when snapshotMode is none', async () => {
     const tab = createMockTab();
     const ctx = createContextWithTab(tab, { snapshot: { mode: 'incremental' } });
     const response = new Response(ctx, 'browser_click', {}, undefined, undefined, 'none');
     response.setIncludeSnapshot(); // suppressed by snapshotMode
     response.addTextResult('Clicked');
-    await response.serialize();
-    expect(tab.captureSnapshot).not.toHaveBeenCalled();
+    const result = await response.serialize();
+    expect(tab.captureSnapshot).toHaveBeenCalled();
+    const text = (result.content[0] as any).text;
+    expect(text).not.toContain('### Snapshot');
   });
 
-  it('skips captureSnapshot when config snapshot mode is none', async () => {
+  it('captures snapshot for baseline even when config snapshot mode is none', async () => {
     const tab = createMockTab();
     const ctx = createContextWithTab(tab, { snapshot: { mode: 'none' } });
     const response = new Response(ctx, 'browser_click', {});
     response.setIncludeSnapshot(); // resolves to 'none' from config
     response.addTextResult('Clicked');
-    await response.serialize();
-    expect(tab.captureSnapshot).not.toHaveBeenCalled();
+    const result = await response.serialize();
+    expect(tab.captureSnapshot).toHaveBeenCalled();
+    const text = (result.content[0] as any).text;
+    expect(text).not.toContain('### Snapshot');
   });
 
   it('calls captureSnapshot when _includeSnapshot is diff', async () => {
@@ -184,7 +192,7 @@ describe('captureSnapshot gated by _includeSnapshot', () => {
     expect(tab.captureSnapshot).toHaveBeenCalledWith('/tmp', { rootSelector: '.main-content', clientId: 'test-context-id' });
   });
 
-  it('still renders tab headers when snapshot is skipped but header changed', async () => {
+  it('still renders tab headers when snapshot mode is none but header changed', async () => {
     const tab = createMockTab();
     tab.headerSnapshot.mockResolvedValue({
       title: 'New Title', url: 'https://example.com/new', current: true,
@@ -195,9 +203,13 @@ describe('captureSnapshot gated by _includeSnapshot', () => {
     response.addTextResult('done');
     const result = await response.serialize();
     const text = (result.content[0] as any).text;
-    expect(tab.captureSnapshot).not.toHaveBeenCalled();
+    // captureSnapshot is called for baseline advancement
+    expect(tab.captureSnapshot).toHaveBeenCalled();
+    // tab headers still rendered when header changed, even with mode 'none'
     expect(text).toContain('### Page');
     expect(text).toContain('https://example.com/new');
+    // but no Snapshot section
+    expect(text).not.toContain('### Snapshot');
   });
 });
 

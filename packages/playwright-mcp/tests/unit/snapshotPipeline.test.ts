@@ -204,14 +204,18 @@ describe('selector × mode combinations', () => {
     });
   });
 
-  it('none + selector does NOT call captureSnapshot', async () => {
+  it('none mode still captures snapshot for baseline advancement', async () => {
     const tab = createMockTab();
     const ctx = createContextWithTab(tab);
     const response = new Response(ctx, 'browser_click', {});
     response.setIncludeSnapshot('none', '.main');
     response.addTextResult('Done');
-    await response.serialize();
-    expect(tab.captureSnapshot).not.toHaveBeenCalled();
+    const result = await response.serialize();
+    // captureSnapshot must be called to advance baseline for future diffs
+    expect(tab.captureSnapshot).toHaveBeenCalled();
+    // but no Snapshot section in the response (mode is 'none')
+    const text = result.content[0].type === 'text' ? result.content[0].text : '';
+    expect(text).not.toContain('### Snapshot');
   });
 });
 
@@ -291,5 +295,70 @@ describe('snapshotOptionsSchema validation', () => {
 
   it('rejects includeSnapshot: 42', () => {
     expect(() => snapshotOptionsSchema.parse({ includeSnapshot: 42 })).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// G. Empty diff handling (bug: empty string is falsy → fallback to full)
+// ---------------------------------------------------------------------------
+
+describe('empty diff handling', () => {
+  function createMockTabWithEmptyDiff() {
+    return {
+      captureSnapshot: vi.fn().mockResolvedValue({
+        ariaSnapshot: '- heading "Hello"\n- paragraph "World"',
+        ariaSnapshotDiff: '',
+        modalStates: [],
+        events: [],
+      }),
+      headerSnapshot: vi.fn().mockResolvedValue({
+        title: 'Test', url: 'https://example.com', current: true,
+        console: { total: 0, warnings: 0, errors: 0 }, changed: false,
+      }),
+    };
+  }
+
+  it('diff mode with empty diff string does NOT fall back to full snapshot', async () => {
+    const tab = createMockTabWithEmptyDiff();
+    const ctx = createContextWithTab(tab);
+    const response = new Response(ctx, 'browser_click', {}, undefined, undefined, 'diff');
+    response.setIncludeSnapshot();
+    response.addTextResult('Clicked');
+    const result = await response.serialize();
+    const text = result.content[0].type === 'text' ? result.content[0].text : '';
+    // Should NOT contain the full snapshot content
+    expect(text).not.toContain('paragraph "World"');
+  });
+
+  it('diff mode with undefined diff falls back to full', async () => {
+    const tab = createMockTab();
+    // Override to return undefined diff (e.g. first snapshot or after baseline reset)
+    tab.captureSnapshot.mockResolvedValue({
+      ariaSnapshot: '- heading "Hello"',
+      ariaSnapshotDiff: undefined,
+      modalStates: [],
+      events: [],
+    });
+    const ctx = createContextWithTab(tab);
+    const response = new Response(ctx, 'browser_click', {}, undefined, undefined, 'diff');
+    response.setIncludeSnapshot();
+    response.addTextResult('Clicked');
+    const result = await response.serialize();
+    const text = result.content[0].type === 'text' ? result.content[0].text : '';
+    // undefined diff means no baseline — should fall back to full
+    expect(text).toContain('heading "Hello"');
+  });
+
+  it('diff mode with empty diff emits no-changes indicator', async () => {
+    const tab = createMockTabWithEmptyDiff();
+    const ctx = createContextWithTab(tab);
+    const response = new Response(ctx, 'browser_click', {}, undefined, undefined, 'diff');
+    response.setIncludeSnapshot();
+    response.addTextResult('Clicked');
+    const result = await response.serialize();
+    const text = result.content[0].type === 'text' ? result.content[0].text : '';
+    // Should contain a Snapshot section with a no-changes indicator
+    expect(text).toContain('### Snapshot');
+    expect(text).toContain('[no changes]');
   });
 });
