@@ -52,6 +52,16 @@ class RelayTestHarness {
     return ws;
   }
 
+  /** Connect a raw WebSocket to the CDP endpoint without storing it (for multi-client). */
+  async connectPlaywrightRaw(): Promise<WebSocket> {
+    const ws = new WebSocket(this.relay.cdpEndpoint());
+    await new Promise<void>((resolve, reject) => {
+      ws.on('open', resolve);
+      ws.on('error', reject);
+    });
+    return ws;
+  }
+
   /** Disconnect a WebSocket and wait for the close event to propagate. */
   async disconnect(ws: WebSocket): Promise<void> {
     if (ws.readyState === WebSocket.OPEN) {
@@ -62,6 +72,41 @@ class RelayTestHarness {
     }
     // Small delay for relay to process the close event
     await sleep(10);
+  }
+}
+
+/** Helper for multi-client test scenarios. */
+class MultiClientHelper {
+  private _clients = new Map<string, WebSocket>();
+  private _messages = new Map<string, any[]>();
+
+  constructor(private _harness: RelayTestHarness) {}
+
+  async connectClient(label: string): Promise<WebSocket> {
+    const ws = await this._harness.connectPlaywrightRaw();
+    this._clients.set(label, ws);
+    const messages: any[] = [];
+    this._messages.set(label, messages);
+    ws.on('message', (data: WebSocket.RawData) => {
+      messages.push(JSON.parse(data.toString()));
+    });
+    return ws;
+  }
+
+  async disconnectClient(label: string): Promise<void> {
+    const ws = this._clients.get(label);
+    if (ws) {
+      await this._harness.disconnect(ws);
+      this._clients.delete(label);
+    }
+  }
+
+  messagesFor(label: string): any[] {
+    return this._messages.get(label) ?? [];
+  }
+
+  wsFor(label: string): WebSocket | undefined {
+    return this._clients.get(label);
   }
 }
 
@@ -533,5 +578,283 @@ describe('CDPRelayServer — Wave 2', () => {
 
     // URL should remain the top-frame URL
     expect(harness.relay.lastTabUrl).toBe('https://example.com/main');
+  });
+});
+
+describe('CDPRelayServer — Multi-Client', () => {
+  let harness: RelayTestHarness;
+
+  beforeEach(async () => {
+    harness = new RelayTestHarness();
+    await harness.setup({ graceTTL: 200, graceBufferMaxBytes: 1024 });
+  });
+
+  afterEach(async () => {
+    await harness.teardown();
+  });
+
+  it('two clients connect simultaneously', async () => {
+    await harness.connectExtension();
+    const mc = new MultiClientHelper(harness);
+    await mc.connectClient('A');
+    await mc.connectClient('B');
+    expect(harness.relay.state).toBe('connected');
+    expect(harness.relay.clientCount).toBe(2);
+  });
+
+  it('non-last client disconnect: no grace', async () => {
+    await harness.connectExtension();
+    const mc = new MultiClientHelper(harness);
+    await mc.connectClient('A');
+    await mc.connectClient('B');
+
+    await mc.disconnectClient('A');
+    expect(harness.relay.state).toBe('connected');
+    expect(harness.relay.clientCount).toBe(1);
+  });
+
+  it('last client disconnect triggers grace', async () => {
+    await harness.connectExtension();
+    const mc = new MultiClientHelper(harness);
+    await mc.connectClient('A');
+    await mc.connectClient('B');
+
+    await mc.disconnectClient('A');
+    await mc.disconnectClient('B');
+    expect(harness.relay.state).toBe('grace');
+    expect(harness.relay.clientCount).toBe(0);
+  });
+
+  it('concurrency cap rejects at limit', async () => {
+    const capHarness = new RelayTestHarness();
+    await capHarness.setup({ graceTTL: 200, graceBufferMaxBytes: 1024, maxConcurrentClients: 2 });
+    try {
+      await capHarness.connectExtension();
+      await capHarness.connectPlaywrightRaw();
+      await capHarness.connectPlaywrightRaw();
+
+      // Third should be rejected
+      const ws3 = new WebSocket(capHarness.relay.cdpEndpoint());
+      const closeEvent = await new Promise<{ code: number; reason: string }>(resolve => {
+        ws3.on('close', (code, reason) => resolve({ code, reason: reason.toString() }));
+      });
+      expect(closeEvent.code).toBe(1008);
+      expect(closeEvent.reason).toContain('Concurrent client limit');
+    } finally {
+      await capHarness.teardown();
+    }
+  });
+
+  it('slot recycling after disconnect', async () => {
+    const capHarness = new RelayTestHarness();
+    await capHarness.setup({ graceTTL: 200, graceBufferMaxBytes: 1024, maxConcurrentClients: 2 });
+    try {
+      await capHarness.connectExtension();
+      const mc = new MultiClientHelper(capHarness);
+      await mc.connectClient('A');
+      await mc.connectClient('B');
+      expect(capHarness.relay.clientCount).toBe(2);
+
+      await mc.disconnectClient('A');
+      expect(capHarness.relay.clientCount).toBe(1);
+
+      // Should accept a new client now
+      await mc.connectClient('C');
+      expect(capHarness.relay.clientCount).toBe(2);
+    } finally {
+      await capHarness.teardown();
+    }
+  });
+
+  it('CDP command routes response to correct client', async () => {
+    const ext = await harness.connectExtension();
+    ext.on('message', (data: WebSocket.RawData) => {
+      const msg = JSON.parse(data.toString());
+      if (msg.method === 'forwardCDPCommand') {
+        // Echo back the method name as the result so we can verify routing
+        ext.send(JSON.stringify({ id: msg.id, result: { echo: msg.params.method } }));
+      }
+    });
+
+    const mc = new MultiClientHelper(harness);
+    await mc.connectClient('A');
+    await mc.connectClient('B');
+
+    mc.wsFor('A')!.send(JSON.stringify({ id: 100, method: 'Runtime.evaluate', params: { expression: '1' } }));
+    mc.wsFor('B')!.send(JSON.stringify({ id: 200, method: 'DOM.getDocument', params: {} }));
+
+    await sleep(50);
+
+    const aMessages = mc.messagesFor('A');
+    const bMessages = mc.messagesFor('B');
+
+    expect(aMessages.some(m => m.id === 100)).toBe(true);
+    expect(bMessages.some(m => m.id === 200)).toBe(true);
+    // No cross-talk
+    expect(aMessages.some(m => m.id === 200)).toBe(false);
+    expect(bMessages.some(m => m.id === 100)).toBe(false);
+  });
+
+  it('CDP event routes to correct client by sessionId', async () => {
+    const ext = await harness.connectExtension();
+    ext.on('message', (data: WebSocket.RawData) => {
+      const msg = JSON.parse(data.toString());
+      if (msg.method === 'attachToTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { targetInfo: { type: 'page', url: 'https://example.com' }, tabId: msg.id * 10 },
+        }));
+      }
+    });
+
+    const mc = new MultiClientHelper(harness);
+    await mc.connectClient('A');
+    await mc.connectClient('B');
+
+    // Trigger Target.setAutoAttach for both clients
+    mc.wsFor('A')!.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(30);
+    mc.wsFor('B')!.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(30);
+
+    // Get sessionIds from the attachedToTarget events
+    const aAttach = mc.messagesFor('A').find(m => m.method === 'Target.attachedToTarget');
+    const bAttach = mc.messagesFor('B').find(m => m.method === 'Target.attachedToTarget');
+    expect(aAttach).toBeDefined();
+    expect(bAttach).toBeDefined();
+    const sessionA = aAttach.params.sessionId;
+    const sessionB = bAttach.params.sessionId;
+
+    // Send event tagged with sessionA — only client A should receive it
+    ext.send(JSON.stringify({
+      method: 'forwardCDPEvent',
+      params: {
+        sessionId: sessionA,
+        method: 'Runtime.consoleAPICalled',
+        params: { type: 'log', args: [] },
+      },
+    }));
+    await sleep(30);
+
+    const aConsole = mc.messagesFor('A').filter(m => m.method === 'Runtime.consoleAPICalled');
+    const bConsole = mc.messagesFor('B').filter(m => m.method === 'Runtime.consoleAPICalled');
+    expect(aConsole.length).toBe(1);
+    expect(bConsole.length).toBe(0);
+  });
+
+  it('Target.setAutoAttach assigns unique sessionIds', async () => {
+    const ext = await harness.connectExtension();
+    ext.on('message', (data: WebSocket.RawData) => {
+      const msg = JSON.parse(data.toString());
+      if (msg.method === 'attachToTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { targetInfo: { type: 'page', url: 'https://example.com' }, tabId: 42 },
+        }));
+      }
+    });
+
+    const mc = new MultiClientHelper(harness);
+    await mc.connectClient('A');
+    await mc.connectClient('B');
+
+    mc.wsFor('A')!.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(30);
+    mc.wsFor('B')!.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(30);
+
+    const aAttach = mc.messagesFor('A').find(m => m.method === 'Target.attachedToTarget');
+    const bAttach = mc.messagesFor('B').find(m => m.method === 'Target.attachedToTarget');
+    expect(aAttach.params.sessionId).toMatch(/^pw-tab-/);
+    expect(bAttach.params.sessionId).toMatch(/^pw-tab-/);
+    expect(aAttach.params.sessionId).not.toBe(bAttach.params.sessionId);
+  });
+
+  it('grace reconnection resumes last client session', async () => {
+    const ext = await harness.connectExtension();
+    ext.on('message', (data: WebSocket.RawData) => {
+      const msg = JSON.parse(data.toString());
+      if (msg.method === 'attachToTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { targetInfo: { type: 'page', url: 'https://example.com' }, tabId: 42 },
+        }));
+      }
+    });
+
+    const pw = await harness.connectPlaywright();
+    pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(30);
+
+    await harness.disconnect(pw);
+    expect(harness.relay.state).toBe('grace');
+    expect(harness.relay.lastTabId).toBe(42);
+
+    const pw2 = await harness.connectPlaywright();
+    expect(harness.relay.state).toBe('connected');
+    expect(harness.relay.clientCount).toBe(1);
+    // tabId is preserved from the resumed session
+    expect(harness.relay.lastTabId).toBe(42);
+  });
+
+  it('grace only fires for last client', async () => {
+    await harness.connectExtension();
+    const mc = new MultiClientHelper(harness);
+    await mc.connectClient('A');
+    await mc.connectClient('B');
+
+    // Disconnect A — should NOT enter grace
+    await mc.disconnectClient('A');
+    expect(harness.relay.state).toBe('connected');
+
+    // Disconnect B (last) — should enter grace
+    await mc.disconnectClient('B');
+    expect(harness.relay.state).toBe('grace');
+  });
+
+  it('extension disconnect with N clients → extensionGrace', async () => {
+    const ext = await harness.connectExtension();
+    const mc = new MultiClientHelper(harness);
+    await mc.connectClient('A');
+    await mc.connectClient('B');
+
+    await harness.disconnect(ext);
+    expect(harness.relay.state).toBe('extensionGrace');
+    // Both clients still counted
+    expect(harness.relay.clientCount).toBe(2);
+  });
+
+  it('simultaneous CDP commands: no cross-talk', async () => {
+    const ext = await harness.connectExtension();
+    // Extension responds to each forwardCDPCommand with the expression as result
+    ext.on('message', (data: WebSocket.RawData) => {
+      const msg = JSON.parse(data.toString());
+      if (msg.method === 'forwardCDPCommand') {
+        // Small delay to simulate async processing
+        setTimeout(() => {
+          ext.send(JSON.stringify({
+            id: msg.id,
+            result: { value: msg.params.params?.expression ?? 'unknown' },
+          }));
+        }, 5);
+      }
+    });
+
+    const mc = new MultiClientHelper(harness);
+    await mc.connectClient('A');
+    await mc.connectClient('B');
+
+    // Fire simultaneously
+    mc.wsFor('A')!.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression: 'fromA' } }));
+    mc.wsFor('B')!.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression: 'fromB' } }));
+
+    await sleep(50);
+
+    const aResp = mc.messagesFor('A').find(m => m.id === 1 && m.result);
+    const bResp = mc.messagesFor('B').find(m => m.id === 1 && m.result);
+    expect(aResp).toBeDefined();
+    expect(bResp).toBeDefined();
+    expect(aResp.result.value).toBe('fromA');
+    expect(bResp.result.value).toBe('fromB');
   });
 });

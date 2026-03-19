@@ -425,27 +425,35 @@ describe('CDPRelay respawn (no orphaned servers)', () => {
     // Set some state that would exist after a browser session
     // Access private fields for testing via any cast
     const r = relay as any;
-    r._connectedTabInfo = { targetInfo: { type: 'page' }, sessionId: 'pw-tab-1' };
+    // Seed a client session with tab info (replaces old _connectedTabInfo + _lastTabId/Url)
+    const fakeSession = {
+      clientId: 'test-client',
+      ws: { readyState: 3 }, // CLOSED
+      sessionId: 'pw-tab-1',
+      tabId: 42,
+      targetInfo: { type: 'page' },
+      tabUrl: 'https://example.com',
+    };
+    r._clients.set('test-client', fakeSession);
+    r._sessionToClient.set('pw-tab-1', 'test-client');
     r._nextSessionId = 5;
     r._playwrightReconnectCount = 2;
     r._graceBuffer = [{ data: 'event1', size: 12 }];
     r._graceBufferBytes = 12;
-    r._lastTabId = 42;
-    r._lastTabUrl = 'https://example.com';
 
     relay.prepareForReconnect();
 
     // Connection state reset
-    expect(r._playwrightConnection).toBeNull();
+    expect(r._clients.size).toBe(0);
+    expect(r._sessionToClient.size).toBe(0);
     expect(r._extensionConnection).toBeNull();
-    expect(r._connectedTabInfo).toBeUndefined();
     expect(r._nextSessionId).toBe(1);
     expect(r._playwrightReconnectCount).toBe(0);
     expect(r._graceBuffer).toEqual([]);
     expect(r._graceBufferBytes).toBe(0);
     expect(relay.state).toBe('disconnected');
 
-    // Tab continuity preserved
+    // Tab continuity preserved via _lastDisconnectedSession
     expect(relay.lastTabId).toBe(42);
     expect(relay.lastTabUrl).toBe('https://example.com');
   });
