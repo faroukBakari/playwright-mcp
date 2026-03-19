@@ -15,6 +15,7 @@ export interface TabEntry {
   windowId: number;
   url: string;
   title: string;
+  sessionId?: string;  // MCP session that owns this tab (for recovery after SW restart)
   status: 'active' | 'loading' | 'unloaded';
   debugger: {
     attached: boolean;
@@ -39,7 +40,7 @@ async function save(registry: Registry): Promise<void> {
 
 // --- Public API (called by background.ts) ---
 
-export async function upsertOnAttach(tabId: number, windowId: number, tabInfo: { url?: string; title?: string }): Promise<void> {
+export async function upsertOnAttach(tabId: number, windowId: number, tabInfo: { url?: string; title?: string; sessionId?: string }): Promise<void> {
   const registry = await load();
   const key = String(tabId);
   const existing = registry[key];
@@ -48,6 +49,7 @@ export async function upsertOnAttach(tabId: number, windowId: number, tabInfo: {
     windowId,
     url: tabInfo.url || existing?.url || '',
     title: tabInfo.title || existing?.title || '',
+    sessionId: tabInfo.sessionId || existing?.sessionId,
     status: 'active',
     debugger: {
       attached: true,
@@ -57,6 +59,11 @@ export async function upsertOnAttach(tabId: number, windowId: number, tabInfo: {
   };
   await save(registry);
   extLog('registry','tabRegistry: upsert on attach', tabId);
+}
+
+export async function getBySessionId(sessionId: string): Promise<TabEntry | undefined> {
+  const registry = await load();
+  return Object.values(registry).find(entry => entry.sessionId === sessionId);
 }
 
 export async function getAll(): Promise<TabEntry[]> {

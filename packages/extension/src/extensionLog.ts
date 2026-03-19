@@ -10,7 +10,7 @@
  * `ext:<channel>` prefix for grep-friendly filtering.
  */
 
-export type LogChannel = 'debugger' | 'relay' | 'lifecycle' | 'registry';
+export type LogChannel = 'debugger' | 'relay' | 'lifecycle' | 'registry' | 'tabManager';
 type LogLevel = 'info' | 'warn' | 'error';
 export type LogEntry = { type: 'log:entry'; channel: string; level: string; message: string; ts: number };
 

@@ -18,6 +18,7 @@ import { extLog, setSink, clearSink } from './extensionLog';
 import type { LogEntry } from './extensionLog';
 import { reattachPromise } from './debuggerManager';
 import { TabManager } from './tabManager';
+import * as tabRegistry from './tabRegistry';
 
 type ProtocolCommand = {
   id: number;
@@ -44,7 +45,7 @@ export class RelayConnection {
 
   onclose?: () => void;
   onregistrymessage?: (message: any) => Promise<any>;
-  ontabattach?: (tabId: number) => void;
+  ontabattach?: (tabId: number, sessionId: string) => void;
   ontabdetach?: (tabId: number) => void;
 
   constructor(ws: WebSocket) {
@@ -176,15 +177,59 @@ export class RelayConnection {
         tabId = newTab.id!;
       }
 
-      const debuggee = this._tabManager.attach(sessionId ?? `_anon-${tabId}`, tabId);
+      const effectiveSessionId = sessionId ?? `_anon-${tabId}`;
+      const debuggee = this._tabManager.attach(effectiveSessionId, tabId);
       extLog('relay', 'Attaching debugger to tab:', debuggee);
       await chrome.debugger.attach(debuggee, '1.3');
-      this.ontabattach?.(tabId);
+      this.ontabattach?.(tabId, effectiveSessionId);
       const result: any = await chrome.debugger.sendCommand(debuggee, 'Target.getTargetInfo');
       return {
         targetInfo: result?.targetInfo,
         tabId,
       };
+    }
+
+    if (message.method === 'recoverSessions') {
+      const sessions: Array<{ sessionId: string; cdpSessionId: string }> = message.params?.sessions ?? [];
+      const results: Array<{ sessionId: string; tabId?: number; targetInfo?: any; success: boolean; error?: string }> = [];
+      const claimedTabIds = new Set<number>();
+
+      for (const { sessionId } of sessions) {
+        try {
+          const entry = await tabRegistry.getBySessionId(sessionId);
+          if (!entry) {
+            results.push({ sessionId, success: false, error: 'No registry entry for session' });
+            continue;
+          }
+
+          let tabId = entry.tabId;
+          // Verify tab still exists (may be invalid after browser death)
+          try {
+            await chrome.tabs.get(tabId);
+          } catch {
+            // Tab gone — try URL match as fallback, excluding already-claimed tabs
+            const allTabs = await chrome.tabs.query({});
+            const match = allTabs.find(t => t.url === entry.url && t.id != null && !claimedTabIds.has(t.id!));
+            if (match?.id != null) {
+              tabId = match.id;
+            } else {
+              results.push({ sessionId, success: false, error: `Tab ${entry.tabId} gone, no URL match for ${entry.url}` });
+              continue;
+            }
+          }
+          claimedTabIds.add(tabId);
+
+          const debuggee = this._tabManager.attach(sessionId, tabId);
+          await chrome.debugger.attach(debuggee, '1.3');
+          this.ontabattach?.(tabId, sessionId);
+          const result: any = await chrome.debugger.sendCommand(debuggee, 'Target.getTargetInfo');
+          results.push({ sessionId, tabId, targetInfo: result?.targetInfo, success: true });
+        } catch (error: any) {
+          results.push({ sessionId, success: false, error: error.message });
+        }
+      }
+
+      return results;
     }
 
     if (message.method === 'detachTab') {
