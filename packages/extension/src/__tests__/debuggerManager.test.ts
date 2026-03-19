@@ -2,7 +2,8 @@
  * Unit tests for debuggerManager — auto-reattach on CDP detach.
  *
  * Tests: terminal reasons (target_closed, canceled_by_user, replaced_with_devtools),
- * transient reasons (reattach with backoff), exhaustion after MAX_RETRIES.
+ * transient reasons (reattach with backoff), exhaustion after MAX_RETRIES,
+ * per-tab reattach promise isolation.
  * Chrome APIs are mocked via chrome-mock.ts setup file.
  */
 
@@ -128,12 +129,12 @@ describe('debuggerManager', () => {
       }, { timeout: 2000 });
     });
 
-    it('exposes reattachPromise during security-induced reattach', async () => {
+    it('exposes reattachPromise(tabId) during security-induced reattach', async () => {
       await tabRegistry.upsertOnAttach(42, 1, { url: 'https://x.com' });
       seedTab({ id: 42, url: 'https://x.com', title: 'Test', windowId: 1 });
 
       // No reattach in progress yet
-      expect(debuggerManager.reattachPromise()).toBeNull();
+      expect(debuggerManager.reattachPromise(42)).toBeNull();
 
       const handler = getDetachHandler();
       handler({ tabId: 42 }, 'target_closed');
@@ -141,14 +142,67 @@ describe('debuggerManager', () => {
       // Promise should be available during the debounce window
       // (allow a tick for the async handleTargetClosed to start)
       await vi.waitFor(() => {
-        expect(debuggerManager.reattachPromise()).not.toBeNull();
+        expect(debuggerManager.reattachPromise(42)).not.toBeNull();
       }, { timeout: 100 });
 
-      const result = await debuggerManager.reattachPromise()!;
+      const result = await debuggerManager.reattachPromise(42)!;
       expect(result).toBe(true);
 
       // After resolution, promise should be cleared
-      expect(debuggerManager.reattachPromise()).toBeNull();
+      expect(debuggerManager.reattachPromise(42)).toBeNull();
+    });
+  });
+
+  describe('per-tab reattach isolation', () => {
+    it('reattachPromise for tab A is independent of tab B', async () => {
+      await tabRegistry.upsertOnAttach(42, 1, { url: 'https://a.com' });
+      await tabRegistry.upsertOnAttach(77, 1, { url: 'https://b.com' });
+      seedTab({ id: 42, url: 'https://a.com', title: 'Tab A', windowId: 1 });
+      seedTab({ id: 77, url: 'https://b.com', title: 'Tab B', windowId: 1 });
+
+      const handler = getDetachHandler();
+
+      // Trigger security-induced detach on tab 42 only
+      handler({ tabId: 42 }, 'target_closed');
+
+      await vi.waitFor(() => {
+        expect(debuggerManager.reattachPromise(42)).not.toBeNull();
+      }, { timeout: 100 });
+
+      // Tab 77 should have no reattach promise
+      expect(debuggerManager.reattachPromise(77)).toBeNull();
+
+      // Wait for tab 42 to complete
+      const result = await debuggerManager.reattachPromise(42)!;
+      expect(result).toBe(true);
+    });
+
+    it('security-detach for tab A does not block tab B operations', async () => {
+      await tabRegistry.upsertOnAttach(42, 1, { url: 'https://a.com' });
+      await tabRegistry.upsertOnAttach(77, 1, { url: 'https://b.com' });
+      seedTab({ id: 42, url: 'https://a.com', title: 'Tab A', windowId: 1 });
+      seedTab({ id: 77, url: 'https://b.com', title: 'Tab B', windowId: 1 });
+
+      // Make tab 42 reattach slow (fail then succeed) while tab 77 is untouched
+      let attachCallCount = 0;
+      (chrome.debugger.attach as any).mockImplementation(async (target: chrome.debugger.Debuggee) => {
+        attachCallCount++;
+        if (target.tabId === 42 && attachCallCount === 1) {
+          // First attempt for tab 42 fails
+          throw new Error('Temporarily unavailable');
+        }
+        // All other calls succeed
+      });
+
+      const handler = getDetachHandler();
+      handler({ tabId: 42 }, 'target_closed');
+
+      await vi.waitFor(() => {
+        expect(debuggerManager.reattachPromise(42)).not.toBeNull();
+      }, { timeout: 100 });
+
+      // Tab 77 has no reattach pending — its commands should proceed normally
+      expect(debuggerManager.reattachPromise(77)).toBeNull();
     });
   });
 
@@ -170,22 +224,27 @@ describe('debuggerManager', () => {
     });
 
     it('fires terminal callback after MAX_RETRIES exhaustion', { timeout: 20000 }, async () => {
-      await tabRegistry.upsertOnAttach(42, 1, {});
-      seedTab({ id: 42, url: 'https://x.com' });
+      await tabRegistry.upsertOnAttach(99, 1, {});
+      seedTab({ id: 99, url: 'https://x.com' });
 
-      // Make attach always fail
-      (chrome.debugger.attach as any).mockRejectedValue(new Error('attach failed'));
+      // Track attach calls specifically for tab 99
+      const tab99AttachCalls: number[] = [];
+      (chrome.debugger.attach as any).mockImplementation(async (target: chrome.debugger.Debuggee) => {
+        if (target.tabId === 99)
+          tab99AttachCalls.push(target.tabId);
+        throw new Error('attach failed');
+      });
 
       const handler = getDetachHandler();
-      handler({ tabId: 42 }, 'transient_reason');
+      handler({ tabId: 99 }, 'transient_reason');
 
       // After 3 failed attempts (with backoff), terminal callback fires
       await vi.waitFor(() => {
-        expect(terminalCallback).toHaveBeenCalledWith(42, 'reattach_exhausted');
+        expect(terminalCallback).toHaveBeenCalledWith(99, 'reattach_exhausted');
       }, { timeout: 15000 });
 
-      // Should have attempted 3 times
-      expect(chrome.debugger.attach).toHaveBeenCalledTimes(3);
+      // Should have attempted 3 times for this specific tab
+      expect(tab99AttachCalls).toHaveLength(3);
     });
   });
 

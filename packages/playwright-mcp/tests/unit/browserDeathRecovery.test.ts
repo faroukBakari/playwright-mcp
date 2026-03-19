@@ -430,9 +430,7 @@ describe('CDPRelay respawn (no orphaned servers)', () => {
       sessionId: 'test-client',
       ws: { readyState: 3 }, // CLOSED
       cdpSessionId: 'session-test-client',
-      tabId: 42,
       targetInfo: { type: 'page' },
-      tabUrl: 'https://example.com',
     };
     r._clients.set('test-client', fakeSession);
     r._playwrightReconnectCount = 2;
@@ -448,10 +446,6 @@ describe('CDPRelay respawn (no orphaned servers)', () => {
     expect(r._graceBuffer).toEqual([]);
     expect(r._graceBufferBytes).toBe(0);
     expect(relay.state).toBe('disconnected');
-
-    // Tab continuity preserved via _lastDisconnectedSession
-    expect(relay.lastTabId).toBe(42);
-    expect(relay.lastTabUrl).toBe('https://example.com');
   });
 
   it('prepareForReconnect is idempotent (safe on first call)', async () => {

@@ -47,6 +47,24 @@ describe('tabRegistry', () => {
       expect(all[0].url).toBe('https://kept.com');
       expect(all[0].title).toBe('Kept');
     });
+
+    it('stores sessionId when provided', async () => {
+      await tabRegistry.upsertOnAttach(42, 1, { url: 'https://x.com', sessionId: 'session-abc' });
+      const all = await tabRegistry.getAll();
+
+      expect(all).toHaveLength(1);
+      expect(all[0].sessionId).toBe('session-abc');
+    });
+
+    it('preserves sessionId when not provided on re-upsert', async () => {
+      await tabRegistry.upsertOnAttach(42, 1, { url: 'https://x.com', sessionId: 'session-abc' });
+      await tabRegistry.upsertOnAttach(42, 1, { url: 'https://y.com' });
+      const all = await tabRegistry.getAll();
+
+      expect(all).toHaveLength(1);
+      expect(all[0].sessionId).toBe('session-abc');
+      expect(all[0].url).toBe('https://y.com');
+    });
   });
 
   describe('getAll', () => {
@@ -62,6 +80,33 @@ describe('tabRegistry', () => {
       const all = await tabRegistry.getAll();
       expect(all).toHaveLength(3);
       expect(all.map(e => e.tabId).sort()).toEqual([1, 2, 3]);
+    });
+  });
+
+  describe('getBySessionId', () => {
+    it('finds matching entry', async () => {
+      await tabRegistry.upsertOnAttach(42, 1, { url: 'https://x.com', sessionId: 'session-abc' });
+      const entry = await tabRegistry.getBySessionId('session-abc');
+
+      expect(entry).toBeDefined();
+      expect(entry!.tabId).toBe(42);
+      expect(entry!.sessionId).toBe('session-abc');
+    });
+
+    it('returns undefined for unknown sessionId', async () => {
+      const entry = await tabRegistry.getBySessionId('nonexistent');
+      expect(entry).toBeUndefined();
+    });
+
+    it('returns correct entry among multiple tabs', async () => {
+      await tabRegistry.upsertOnAttach(1, 1, { url: 'a', sessionId: 'sess-1' });
+      await tabRegistry.upsertOnAttach(2, 1, { url: 'b', sessionId: 'sess-2' });
+      await tabRegistry.upsertOnAttach(3, 2, { url: 'c', sessionId: 'sess-3' });
+
+      const entry = await tabRegistry.getBySessionId('sess-2');
+      expect(entry).toBeDefined();
+      expect(entry!.tabId).toBe(2);
+      expect(entry!.url).toBe('b');
     });
   });
 

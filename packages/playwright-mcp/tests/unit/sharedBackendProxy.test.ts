@@ -76,10 +76,6 @@ describe('SharedBackendProxy', () => {
     expect(stub.removedContexts).toEqual([sessionId]);
   });
 
-  it('exposes browserContext from underlying backend', () => {
-    expect(proxy.browserContext).toBe(stub.backend.browserContext);
-  });
-
   it('passes progress callback through to backend', async () => {
     const progress = vi.fn();
     await proxy.callTool('browser_snapshot', {}, progress);

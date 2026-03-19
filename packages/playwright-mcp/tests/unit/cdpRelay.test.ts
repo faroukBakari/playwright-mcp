@@ -382,22 +382,25 @@ describe('CDPRelayServer — Wave 2', () => {
       pw2.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
       await sleep(30);
 
-      expect(h2.relay.lastTabId).toBe(42);
-
       // Now disconnect extension
       await h2.disconnect(ext2);
       expect(h2.relay.state).toBe('extensionGrace');
 
-      // Reconnect extension — register handler BEFORE connect to catch attachToTab
+      // Reconnect extension — register handler BEFORE connect to catch recoverSessions
       const ext3Messages: any[] = [];
       const ext3 = new WebSocket(h2.relay.extensionEndpoint());
       ext3.on('message', (data: WebSocket.RawData) => {
         const msg = JSON.parse(data.toString());
         ext3Messages.push(msg);
-        if (msg.method === 'attachToTab') {
+        if (msg.method === 'recoverSessions') {
           ext3.send(JSON.stringify({
             id: msg.id,
-            result: { targetInfo: { type: 'page', url: 'https://example.com' }, tabId: 42 },
+            result: msg.params.sessions.map((s: any) => ({
+              sessionId: s.sessionId,
+              tabId: 42,
+              targetInfo: { type: 'page', url: 'https://example.com' },
+              success: true,
+            })),
           }));
         }
       });
@@ -409,8 +412,8 @@ describe('CDPRelayServer — Wave 2', () => {
       await sleep(50);
 
       expect(h2.relay.state).toBe('connected');
-      const attachMsg = ext3Messages.find(m => m.method === 'attachToTab');
-      expect(attachMsg?.params?.tabId).toBe(42);
+      const recoverMsg = ext3Messages.find(m => m.method === 'recoverSessions');
+      expect(recoverMsg).toBeDefined();
     } finally {
       await h2.teardown();
     }
@@ -464,7 +467,7 @@ describe('CDPRelayServer — Wave 2', () => {
     expect(harness.relay.state).toBe('disconnected');
   });
 
-  it('extension reconnect sends attachToTab with tracked tabId', async () => {
+  it('extension reconnect sends recoverSessions with session data', async () => {
     const ext = await harness.connectExtension();
     const pw = await harness.connectPlaywright();
 
@@ -479,25 +482,29 @@ describe('CDPRelayServer — Wave 2', () => {
       }
     });
 
-    // Trigger Target.setAutoAttach to seed lastTabId
+    // Trigger Target.setAutoAttach to create a session with cdpSessionId
     pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
     await sleep(30);
-    expect(harness.relay.lastTabId).toBe(77);
 
     // Disconnect extension
     await harness.disconnect(ext);
     expect(harness.relay.state).toBe('extensionGrace');
 
-    // Reconnect — register handler BEFORE connect to catch attachToTab
+    // Reconnect — register handler BEFORE connect to catch recoverSessions
     const ext2Messages: any[] = [];
     const ext2 = new WebSocket(harness.relay.extensionEndpoint());
     ext2.on('message', (data: WebSocket.RawData) => {
       const msg = JSON.parse(data.toString());
       ext2Messages.push(msg);
-      if (msg.method === 'attachToTab') {
+      if (msg.method === 'recoverSessions') {
         ext2.send(JSON.stringify({
           id: msg.id,
-          result: { targetInfo: { type: 'page', url: 'https://example.com' }, tabId: 77 },
+          result: msg.params.sessions.map((s: any) => ({
+            sessionId: s.sessionId,
+            tabId: 77,
+            targetInfo: { type: 'page', url: 'https://example.com' },
+            success: true,
+          })),
         }));
       }
     });
@@ -508,77 +515,118 @@ describe('CDPRelayServer — Wave 2', () => {
 
     await sleep(50);
 
-    const attachMsg = ext2Messages.find(m => m.method === 'attachToTab');
-    expect(attachMsg).toBeDefined();
-    expect(attachMsg.params.tabId).toBe(77);
+    const recoverMsg = ext2Messages.find(m => m.method === 'recoverSessions');
+    expect(recoverMsg).toBeDefined();
+    expect(recoverMsg.params.sessions.length).toBeGreaterThan(0);
+    expect(recoverMsg.params.sessions[0]).toHaveProperty('sessionId');
+    expect(recoverMsg.params.sessions[0]).toHaveProperty('cdpSessionId');
     expect(harness.relay.state).toBe('connected');
   });
 
-  it('URL tracking from Page.frameNavigated', async () => {
+  it('failed recovery sessions are closed (zombie cleanup)', async () => {
     const ext = await harness.connectExtension();
     const pw = await harness.connectPlaywright();
 
-    // Send a top-frame Page.frameNavigated event from extension
-    ext.send(JSON.stringify({
-      method: 'forwardCDPEvent',
-      params: {
-        method: 'Page.frameNavigated',
-        params: {
-          frame: { url: 'https://example.com/page1', id: 'main-frame' },
-        },
-      },
-    }));
+    // Set up extension to respond to attachToTab
+    ext.on('message', (data: WebSocket.RawData) => {
+      const msg = JSON.parse(data.toString());
+      if (msg.method === 'attachToTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { targetInfo: { type: 'page', url: 'https://example.com' }, tabId: 77 },
+        }));
+      }
+    });
 
-    await sleep(20);
-    expect(harness.relay.lastTabUrl).toBe('https://example.com/page1');
+    // Trigger Target.setAutoAttach to create a session with cdpSessionId
+    pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(30);
+    expect(harness.relay.clientCount).toBe(1);
 
-    // Send another navigation
-    ext.send(JSON.stringify({
-      method: 'forwardCDPEvent',
-      params: {
-        method: 'Page.frameNavigated',
-        params: {
-          frame: { url: 'https://example.com/page2', id: 'main-frame' },
-        },
-      },
-    }));
+    // Disconnect extension
+    await harness.disconnect(ext);
+    expect(harness.relay.state).toBe('extensionGrace');
 
-    await sleep(20);
-    expect(harness.relay.lastTabUrl).toBe('https://example.com/page2');
+    // Track whether the Playwright WS gets closed
+    const pwClosed = new Promise<{ code: number; reason: string }>(resolve => {
+      pw.on('close', (code, reason) => resolve({ code, reason: reason.toString() }));
+    });
+
+    // Reconnect extension — respond with recovery failure for all sessions
+    const ext2 = new WebSocket(harness.relay.extensionEndpoint());
+    ext2.on('message', (data: WebSocket.RawData) => {
+      const msg = JSON.parse(data.toString());
+      if (msg.method === 'recoverSessions') {
+        ext2.send(JSON.stringify({
+          id: msg.id,
+          result: msg.params.sessions.map((s: any) => ({
+            sessionId: s.sessionId,
+            success: false,
+            error: 'Tab gone, no URL match',
+          })),
+        }));
+      }
+    });
+    await new Promise<void>((resolve, reject) => {
+      ext2.on('open', resolve);
+      ext2.on('error', reject);
+    });
+
+    await sleep(50);
+
+    // Zombie session should be cleaned up
+    expect(harness.relay.clientCount).toBe(0);
+    // Playwright WS should have been closed with a reason
+    const closeResult = await pwClosed;
+    expect(closeResult.reason).toContain('Tab lost during recovery');
+    // All sessions failed — relay goes disconnected
+    expect(harness.relay.state).toBe('disconnected');
   });
 
-  it('sub-frame navigations ignored for URL tracking', async () => {
+  it('recovery times out if extension hangs', async () => {
+    // Recreate harness with fast command timeout
+    await harness.teardown();
+    harness = new RelayTestHarness();
+    await harness.setup({ graceTTL: 200, graceBufferMaxBytes: 1024, extensionCommandTimeout: 200 });
+
     const ext = await harness.connectExtension();
     const pw = await harness.connectPlaywright();
 
-    // Send a top-frame navigation first
-    ext.send(JSON.stringify({
-      method: 'forwardCDPEvent',
-      params: {
-        method: 'Page.frameNavigated',
-        params: {
-          frame: { url: 'https://example.com/main', id: 'main-frame' },
-        },
-      },
-    }));
-    await sleep(20);
-    expect(harness.relay.lastTabUrl).toBe('https://example.com/main');
+    // Set up extension to respond to attachToTab
+    ext.on('message', (data: WebSocket.RawData) => {
+      const msg = JSON.parse(data.toString());
+      if (msg.method === 'attachToTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { targetInfo: { type: 'page', url: 'https://example.com' }, tabId: 77 },
+        }));
+      }
+    });
 
-    // Send a sub-frame navigation (has parentFrameId)
-    ext.send(JSON.stringify({
-      method: 'forwardCDPEvent',
-      params: {
-        method: 'Page.frameNavigated',
-        params: {
-          frame: { url: 'https://ads.example.com/iframe', id: 'sub-frame', parentFrameId: 'main-frame' },
-        },
-      },
-    }));
-    await sleep(20);
+    // Trigger Target.setAutoAttach to create a session with cdpSessionId
+    pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(30);
 
-    // URL should remain the top-frame URL
-    expect(harness.relay.lastTabUrl).toBe('https://example.com/main');
+    // Disconnect extension
+    await harness.disconnect(ext);
+    expect(harness.relay.state).toBe('extensionGrace');
+
+    // Reconnect extension — never respond to recoverSessions (simulates hang)
+    const ext2 = new WebSocket(harness.relay.extensionEndpoint());
+    ext2.on('message', () => { /* swallow all messages */ });
+    await new Promise<void>((resolve, reject) => {
+      ext2.on('open', resolve);
+      ext2.on('error', reject);
+    });
+
+    // Wait for the 200ms command timeout to fire
+    await sleep(400);
+
+    // Relay should have given up and disconnected
+    expect(harness.relay.state).toBe('disconnected');
+    expect(harness.relay.clientCount).toBe(0);
   });
+
 });
 
 describe('CDPRelayServer — Multi-Client', () => {
@@ -786,13 +834,10 @@ describe('CDPRelayServer — Multi-Client', () => {
 
     await harness.disconnect(pw);
     expect(harness.relay.state).toBe('grace');
-    expect(harness.relay.lastTabId).toBe(42);
 
     const pw2 = await harness.connectPlaywright();
     expect(harness.relay.state).toBe('connected');
     expect(harness.relay.clientCount).toBe(1);
-    // tabId is preserved from the resumed session
-    expect(harness.relay.lastTabId).toBe(42);
   });
 
   it('grace only fires for last client', async () => {
