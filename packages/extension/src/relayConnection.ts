@@ -17,6 +17,7 @@
 import { extLog, setSink, clearSink } from './extensionLog';
 import type { LogEntry } from './extensionLog';
 import { reattachPromise } from './debuggerManager';
+import { TabManager } from './tabManager';
 
 type ProtocolCommand = {
   id: number;
@@ -33,18 +34,20 @@ type ProtocolResponse = {
 };
 
 export class RelayConnection {
-  private _debuggee: chrome.debugger.Debuggee;
+  private _tabManager = new TabManager();
   private _ws: WebSocket;
   private _eventListener: (source: chrome.debugger.DebuggerSession, method: string, params: any) => void;
   private _tabPromise: Promise<void>;
   private _tabPromiseResolve!: () => void;
+  private _pendingTabId: number | null = null;
   private _closed = false;
 
   onclose?: () => void;
   onregistrymessage?: (message: any) => Promise<any>;
+  ontabattach?: (tabId: number) => void;
+  ontabdetach?: (tabId: number) => void;
 
   constructor(ws: WebSocket) {
-    this._debuggee = { };
     this._tabPromise = new Promise(resolve => this._tabPromiseResolve = resolve);
     this._ws = ws;
     this._ws.onmessage = this._onMessage.bind(this);
@@ -57,9 +60,14 @@ export class RelayConnection {
     setSink((entry: LogEntry) => this._sendLog(entry));
   }
 
+  /** Expose TabManager for background.ts tab closure handling. */
+  get tabManager(): TabManager {
+    return this._tabManager;
+  }
+
   // Either setTabId or close is called after creating the connection.
   setTabId(tabId: number): void {
-    this._debuggee = { tabId };
+    this._pendingTabId = tabId;
     this._tabPromiseResolve();
   }
 
@@ -76,19 +84,23 @@ export class RelayConnection {
     this._closed = true;
     clearSink();
     chrome.debugger.onEvent.removeListener(this._eventListener);
-    chrome.debugger.detach(this._debuggee).catch(() => {});
+    void this._tabManager.detachAll();
     this.onclose?.();
   }
 
   private _onDebuggerEvent(source: chrome.debugger.DebuggerSession, method: string, params: any): void {
-    if (source.tabId !== this._debuggee.tabId)
+    if (source.tabId == null)
+      return;
+    const sessionId = this._tabManager.getSessionForTab(source.tabId);
+    if (!sessionId)
       return;
     extLog('relay', 'Forwarding CDP event:', method, params);
-    const sessionId = source.sessionId;
+    const cdpSessionId = source.sessionId;
     this._sendMessage({
       method: 'forwardCDPEvent',
       params: {
         sessionId,
+        cdpSessionId,
         method,
         params,
       },
@@ -141,34 +153,67 @@ export class RelayConnection {
 
   private async _handleCommand(message: ProtocolCommand): Promise<any> {
     if (message.method === 'attachToTab') {
-      // If tabId is provided (reconnection), update debuggee and resolve tab promise
-      if (message.params?.tabId && this._debuggee.tabId !== message.params.tabId) {
-        this._debuggee = { tabId: message.params.tabId };
+      const sessionId: string | undefined = message.params?.sessionId;
+      const requestedTabId: number | undefined = message.params?.tabId;
+
+      // If explicit tabId provided (reconnection), update pending and resolve
+      if (requestedTabId != null && this._pendingTabId !== requestedTabId) {
+        this._pendingTabId = requestedTabId;
         this._tabPromiseResolve();
       }
-      await this._tabPromise;
-      extLog('relay', 'Attaching debugger to tab:', this._debuggee);
-      await chrome.debugger.attach(this._debuggee, '1.3');
-      const result: any = await chrome.debugger.sendCommand(this._debuggee, 'Target.getTargetInfo');
+
+      let tabId: number;
+      if (requestedTabId != null) {
+        tabId = requestedTabId;
+      } else if (this._tabManager.size === 0) {
+        // First client — wait for popup tab selection
+        await this._tabPromise;
+        tabId = this._pendingTabId!;
+      } else {
+        // Subsequent client with no explicit tabId — create a new tab.
+        // Use about:blank to avoid chrome://newtab which blocks CDP access.
+        const newTab = await chrome.tabs.create({ active: true, url: 'about:blank' });
+        tabId = newTab.id!;
+      }
+
+      const debuggee = this._tabManager.attach(sessionId ?? `_anon-${tabId}`, tabId);
+      extLog('relay', 'Attaching debugger to tab:', debuggee);
+      await chrome.debugger.attach(debuggee, '1.3');
+      this.ontabattach?.(tabId);
+      const result: any = await chrome.debugger.sendCommand(debuggee, 'Target.getTargetInfo');
       return {
         targetInfo: result?.targetInfo,
-        tabId: this._debuggee.tabId,
+        tabId,
       };
     }
-    if (!this._debuggee.tabId)
+
+    if (message.method === 'detachTab') {
+      const sessionId: string | undefined = message.params?.sessionId;
+      if (sessionId) {
+        const tabId = await this._tabManager.detach(sessionId);
+        if (tabId != null)
+          this.ontabdetach?.(tabId);
+      }
+      return {};
+    }
+
+    // For forwardCDPCommand, resolve debuggee via tabManager
+    const debuggee = this._tabManager.getDebuggee(message.params?.sessionId);
+    if (!debuggee?.tabId)
       throw new Error('No tab is connected. Please go to the Playwright MCP extension and select the tab you want to connect to.');
+
     if (message.method === 'forwardCDPCommand') {
-      const { sessionId, method, params } = message.params;
+      const { cdpSessionId, method, params } = message.params;
       extLog('relay', 'CDP command:', method, params);
       const debuggerSession: chrome.debugger.DebuggerSession = {
-        ...this._debuggee,
-        sessionId,
+        ...debuggee,
+        sessionId: cdpSessionId,
       };
       // Forward CDP command to chrome.debugger, with retry on security-induced detach
       try {
         return await chrome.debugger.sendCommand(debuggerSession, method, params);
       } catch (error: any) {
-        const pending = reattachPromise();
+        const pending = reattachPromise(debuggee.tabId!);
         if (!pending)
           throw error;
         extLog('relay', `CDP command failed during reattach, awaiting debugger recovery: ${method}`);

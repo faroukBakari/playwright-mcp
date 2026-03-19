@@ -425,18 +425,16 @@ describe('CDPRelay respawn (no orphaned servers)', () => {
     // Set some state that would exist after a browser session
     // Access private fields for testing via any cast
     const r = relay as any;
-    // Seed a client session with tab info (replaces old _connectedTabInfo + _lastTabId/Url)
+    // Seed a client session with tab info
     const fakeSession = {
-      clientId: 'test-client',
+      sessionId: 'test-client',
       ws: { readyState: 3 }, // CLOSED
-      sessionId: 'pw-tab-1',
+      cdpSessionId: 'session-test-client',
       tabId: 42,
       targetInfo: { type: 'page' },
       tabUrl: 'https://example.com',
     };
     r._clients.set('test-client', fakeSession);
-    r._sessionToClient.set('pw-tab-1', 'test-client');
-    r._nextSessionId = 5;
     r._playwrightReconnectCount = 2;
     r._graceBuffer = [{ data: 'event1', size: 12 }];
     r._graceBufferBytes = 12;
@@ -445,9 +443,7 @@ describe('CDPRelay respawn (no orphaned servers)', () => {
 
     // Connection state reset
     expect(r._clients.size).toBe(0);
-    expect(r._sessionToClient.size).toBe(0);
     expect(r._extensionConnection).toBeNull();
-    expect(r._nextSessionId).toBe(1);
     expect(r._playwrightReconnectCount).toBe(0);
     expect(r._graceBuffer).toEqual([]);
     expect(r._graceBufferBytes).toBe(0);
