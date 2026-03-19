@@ -133,12 +133,13 @@ describe('Session Recovery', () => {
     expect(listRes.status).toBe(200);
   });
 
-  it('stale session ID returns 404 without persistence', async () => {
+  it('on-demand session creation — unknown Mcp-Session-Id + POST creates session', async () => {
     const { port } = await createServer(createTestFactory());
 
-    // Random session ID that was never persisted
+    // Unknown session ID on a POST → on-demand creation (not 404)
     const res = await mcpPost(port, LIST_TOOLS_BODY, 'nonexistent-session-id');
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(200);
+    expect(res.headers['mcp-session-id']).toBe('nonexistent-session-id');
   });
 
   it('persisted session recovers after simulated restart', async () => {
@@ -171,7 +172,7 @@ describe('Session Recovery', () => {
     expect(listRes.headers['mcp-session-id']).toBe(sessionId);
   });
 
-  it('unknown session ID still returns 404 with persisted state present', async () => {
+  it('on-demand session creation — unknown ID works even with persisted state', async () => {
     const factory = createTestFactory();
 
     // Create a session so there is a persisted ID
@@ -181,10 +182,32 @@ describe('Session Recovery', () => {
     await new Promise<void>(r => server1.close(() => r()));
     servers.splice(servers.indexOf(server1), 1);
 
-    // Server 2 — send a DIFFERENT (unknown) session ID
+    // Server 2 — send a DIFFERENT (unknown) session ID → on-demand creation
     const { port: port2 } = await createServer(factory);
     const res = await mcpPost(port2, LIST_TOOLS_BODY, 'completely-wrong-id');
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(200);
+    expect(res.headers['mcp-session-id']).toBe('completely-wrong-id');
+  });
+
+  it('on-demand session creation — tools/call with unknown ID creates working session', async () => {
+    const { port } = await createServer(createTestFactory());
+
+    // POST tools/call with an unknown Mcp-Session-Id → creates session on demand
+    const toolCallBody = {
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'tools/call',
+      params: { name: 'nonexistent_tool', arguments: {} },
+    };
+    const res = await mcpPost(port, toolCallBody, 'bridge-agent-session-123');
+    // Session is created (200), even if the tool doesn't exist (error is in JSON-RPC, not HTTP)
+    expect(res.status).toBe(200);
+    expect(res.headers['mcp-session-id']).toBe('bridge-agent-session-123');
+
+    // Subsequent request with same ID routes to existing session
+    const listRes = await mcpPost(port, LIST_TOOLS_BODY, 'bridge-agent-session-123');
+    expect(listRes.status).toBe(200);
+    expect(listRes.headers['mcp-session-id']).toBe('bridge-agent-session-123');
   });
 
   it('GET /health returns 200 without creating a session', async () => {
