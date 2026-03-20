@@ -9,7 +9,7 @@
  * entry returns that entry — no invented sessionIds, no dual code paths.
  */
 
-import { extLog } from './extensionLog';
+import { extLog, extLogS, extError, extErrorS } from './extensionLog';
 
 export class TabManager {
   /** sessionId → debuggee */
@@ -19,19 +19,34 @@ export class TabManager {
 
   /**
    * Register a session's debugger attachment to a tab.
+   * If another session already owns this tab, bumps it first.
    * Returns the debuggee object for use with chrome.debugger APIs.
    */
-  attach(sessionId: string, tabId: number): chrome.debugger.Debuggee {
+  attach(sessionId: string, tabId: number): { debuggee: chrome.debugger.Debuggee; bumpedSessionId?: string; bumpedDebuggee?: chrome.debugger.Debuggee } {
     // If this sessionId was previously attached to a different tab, clean up
     const existing = this._sessions.get(sessionId);
     if (existing?.tabId != null)
       this._tabToSession.delete(existing.tabId);
 
+    // Bump: if another session owns this tab, evict it.
+    // Capture the debuggee BEFORE deleting so the caller can call
+    // chrome.debugger.detach(bumpedDebuggee) directly — detach(sessionId)
+    // would find nothing after the delete.
+    let bumpedSessionId: string | undefined;
+    let bumpedDebuggee: chrome.debugger.Debuggee | undefined;
+    const previousOwner = this._tabToSession.get(tabId);
+    if (previousOwner != null && previousOwner !== sessionId) {
+      bumpedSessionId = previousOwner;
+      bumpedDebuggee = this._sessions.get(previousOwner);
+      this._sessions.delete(previousOwner);
+      extLogS('tabManager', sessionId, `bumped session ${previousOwner} from tab ${tabId}`);
+    }
+
     const debuggee: chrome.debugger.Debuggee = { tabId };
     this._sessions.set(sessionId, debuggee);
     this._tabToSession.set(tabId, sessionId);
     extLog('tabManager', `attach: sessionId=${sessionId} tabId=${tabId} (${this._sessions.size} sessions)`);
-    return debuggee;
+    return { debuggee, bumpedSessionId, bumpedDebuggee };
   }
 
   /**
@@ -48,7 +63,12 @@ export class TabManager {
     this._tabToSession.delete(tabId);
     extLog('tabManager', `detach: sessionId=${sessionId} tabId=${tabId} (${this._sessions.size} remaining)`);
 
-    await chrome.debugger.detach(debuggee).catch(() => {});
+    try {
+      await chrome.debugger.detach(debuggee);
+      extLogS('tabManager', sessionId, `chrome.debugger.detach success tabId=${tabId}`);
+    } catch (e: any) {
+      extErrorS('tabManager', sessionId, `chrome.debugger.detach failed tabId=${tabId}: ${e.message}`);
+    }
     return tabId;
   }
 
@@ -61,7 +81,11 @@ export class TabManager {
     this._tabToSession.clear();
     extLog('tabManager', `detachAll: detaching ${entries.length} sessions`);
     await Promise.all(
-        entries.map(([, debuggee]) => chrome.debugger.detach(debuggee).catch(() => {}))
+        entries.map(([sessionId, debuggee]) =>
+          chrome.debugger.detach(debuggee)
+            .then(() => extLogS('tabManager', sessionId, `chrome.debugger.detach success tabId=${debuggee.tabId}`))
+            .catch((e: any) => extErrorS('tabManager', sessionId, `chrome.debugger.detach failed tabId=${debuggee.tabId}: ${e.message}`))
+        )
     );
   }
 
@@ -108,5 +132,12 @@ export class TabManager {
   /** Number of attached sessions. */
   get size(): number {
     return this._sessions.size;
+  }
+
+  /** All session→tabId mappings. Used by listTabs for enrichment. */
+  getAllSessions(): Array<{ sessionId: string; tabId: number }> {
+    return [...this._sessions.entries()]
+      .filter(([, d]) => d.tabId != null)
+      .map(([sessionId, d]) => ({ sessionId, tabId: d.tabId! }));
   }
 }

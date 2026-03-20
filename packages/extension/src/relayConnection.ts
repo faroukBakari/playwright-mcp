@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { extLog, setSink, clearSink } from './extensionLog';
+import { extLog, extLogS, extErrorS, setSink, clearSink } from './extensionLog';
 import type { LogEntry } from './extensionLog';
 import { reattachPromise } from './debuggerManager';
 import { TabManager } from './tabManager';
@@ -95,7 +95,7 @@ export class RelayConnection {
     const sessionId = this._tabManager.getSessionForTab(source.tabId);
     if (!sessionId)
       return;
-    extLog('relay', 'Forwarding CDP event:', method, params);
+    extLogS('relay', sessionId, 'Forwarding CDP event:', method, params);
     const cdpSessionId = source.sessionId;
     this._sendMessage({
       method: 'forwardCDPEvent',
@@ -174,18 +174,37 @@ export class RelayConnection {
         // Subsequent client with no explicit tabId — create a new tab.
         // Use about:blank to avoid chrome://newtab which blocks CDP access.
         const newTab = await chrome.tabs.create({ active: true, url: 'about:blank' });
+        extLogS('relay', sessionId, `chrome.tabs.create → tabId=${newTab.id}`);
         tabId = newTab.id!;
       }
 
       const effectiveSessionId = sessionId ?? `_anon-${tabId}`;
-      const debuggee = this._tabManager.attach(effectiveSessionId, tabId);
-      extLog('relay', 'Attaching debugger to tab:', debuggee);
-      await chrome.debugger.attach(debuggee, '1.3');
+      const { debuggee, bumpedSessionId, bumpedDebuggee } = this._tabManager.attach(effectiveSessionId, tabId);
+
+      // If a previous session was bumped, detach its chrome.debugger attachment
+      // directly using the captured debuggee — detach(sessionId) can't find it
+      // because attach() already deleted it from _sessions.
+      if (bumpedSessionId && bumpedDebuggee) {
+        await chrome.debugger.detach(bumpedDebuggee)
+          .then(() => extLogS('relay', effectiveSessionId, `chrome.debugger.detach success for bumped session ${bumpedSessionId}`))
+          .catch(() => extLogS('relay', effectiveSessionId, `chrome.debugger.detach skipped for bumped session ${bumpedSessionId} (tab already closed)`));
+        this.ontabdetach?.(tabId);
+      }
+
+      extLogS('relay', effectiveSessionId, 'Attaching debugger to tab:', debuggee);
+      try {
+        await chrome.debugger.attach(debuggee, '1.3');
+        extLogS('relay', effectiveSessionId, `chrome.debugger.attach success tabId=${tabId}`);
+      } catch (e: any) {
+        extErrorS('relay', effectiveSessionId, `chrome.debugger.attach failed tabId=${tabId}: ${e.message}`);
+        throw e;
+      }
       this.ontabattach?.(tabId, effectiveSessionId);
       const result: any = await chrome.debugger.sendCommand(debuggee, 'Target.getTargetInfo');
       return {
         targetInfo: result?.targetInfo,
         tabId,
+        bumpedSessionId,
       };
     }
 
@@ -219,8 +238,9 @@ export class RelayConnection {
           }
           claimedTabIds.add(tabId);
 
-          const debuggee = this._tabManager.attach(sessionId, tabId);
+          const { debuggee } = this._tabManager.attach(sessionId, tabId);
           await chrome.debugger.attach(debuggee, '1.3');
+          extLogS('relay', sessionId, `chrome.debugger.attach success tabId=${tabId} (recovery)`);
           this.ontabattach?.(tabId, sessionId);
           const result: any = await chrome.debugger.sendCommand(debuggee, 'Target.getTargetInfo');
           results.push({ sessionId, tabId, targetInfo: result?.targetInfo, success: true });
@@ -242,6 +262,54 @@ export class RelayConnection {
       return {};
     }
 
+    if (message.method === 'listTabs') {
+      const allTabs = await chrome.tabs.query({});
+      const sessions = this._tabManager.getAllSessions();
+      const sessionByTab = new Map(sessions.map(s => [s.tabId, s.sessionId]));
+      const automatedTabIds = new Set(sessions.map(s => s.tabId));
+
+      const tabs = allTabs
+        .filter(t => t.id != null && t.url && !['chrome:', 'edge:', 'devtools:'].some(scheme => t.url!.startsWith(scheme)))
+        .map(t => ({
+          tabId: t.id!,
+          url: t.url || '',
+          title: t.title || '',
+          active: t.active ?? false,
+          windowId: t.windowId ?? 0,
+          debuggerAttached: automatedTabIds.has(t.id!),
+          attachedSessionId: sessionByTab.get(t.id!) ?? null,
+        }));
+      return { tabs };
+    }
+
+    if (message.method === 'createTab') {
+      const url: string = message.params?.url ?? 'about:blank';
+      const sessionId: string | undefined = message.params?.sessionId;
+      const newTab = await chrome.tabs.create({ active: true, url });
+      const tabId = newTab.id!;
+      extLogS('relay', sessionId, `chrome.tabs.create → tabId=${tabId} url=${url}`);
+
+      if (sessionId) {
+        const { debuggee, bumpedSessionId, bumpedDebuggee } = this._tabManager.attach(sessionId, tabId);
+        if (bumpedSessionId && bumpedDebuggee) {
+          await chrome.debugger.detach(bumpedDebuggee)
+            .then(() => extLogS('relay', sessionId, `chrome.debugger.detach success for bumped session ${bumpedSessionId}`))
+            .catch(() => extLogS('relay', sessionId, `chrome.debugger.detach skipped for bumped session ${bumpedSessionId} (tab already closed)`));
+          this.ontabdetach?.(tabId);
+        }
+        try {
+          await chrome.debugger.attach(debuggee, '1.3');
+          extLogS('relay', sessionId, `chrome.debugger.attach success tabId=${tabId} (createTab)`);
+        } catch (e: any) {
+          extErrorS('relay', sessionId, `chrome.debugger.attach failed tabId=${tabId} (createTab): ${e.message}`);
+          throw e;
+        }
+        this.ontabattach?.(tabId, sessionId);
+      }
+
+      return { tabId, url: newTab.url || url };
+    }
+
     // For forwardCDPCommand, resolve debuggee via tabManager
     const debuggee = this._tabManager.getDebuggee(message.params?.sessionId);
     if (!debuggee?.tabId)
@@ -249,7 +317,7 @@ export class RelayConnection {
 
     if (message.method === 'forwardCDPCommand') {
       const { cdpSessionId, method, params } = message.params;
-      extLog('relay', 'CDP command:', method, params);
+      extLogS('relay', message.params?.sessionId, 'CDP command:', method, params);
       const debuggerSession: chrome.debugger.DebuggerSession = {
         ...debuggee,
         sessionId: cdpSessionId,
@@ -261,11 +329,11 @@ export class RelayConnection {
         const pending = reattachPromise(debuggee.tabId!);
         if (!pending)
           throw error;
-        extLog('relay', `CDP command failed during reattach, awaiting debugger recovery: ${method}`);
+        extLogS('relay', message.params?.sessionId, `CDP command failed during reattach, awaiting debugger recovery: ${method}`);
         const success = await pending;
         if (!success)
           throw error;
-        extLog('relay', `Retrying CDP command after reattach: ${method}`);
+        extLogS('relay', message.params?.sessionId, `Retrying CDP command after reattach: ${method}`);
         return await chrome.debugger.sendCommand(debuggerSession, method, params);
       }
     }

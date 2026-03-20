@@ -21,16 +21,19 @@ import { Button, TabItem  } from './tabItem';
 import type { TabInfo } from './tabItem';
 import { AuthTokenSection } from './authToken';
 
+interface ConnectedTab extends TabInfo {
+  sessionId?: string;
+}
+
 interface ConnectionStatus {
   isConnected: boolean;
-  connectedTabId: number | null;
-  connectedTab?: TabInfo;
+  connectedTabs: ConnectedTab[];
 }
 
 const StatusApp: React.FC = () => {
   const [status, setStatus] = useState<ConnectionStatus>({
     isConnected: false,
-    connectedTabId: null
+    connectedTabs: []
   });
 
   useEffect(() => {
@@ -38,33 +41,40 @@ const StatusApp: React.FC = () => {
   }, []);
 
   const loadStatus = async () => {
-    // Get current connection status from background script
-    const { connectedTabId } = await chrome.runtime.sendMessage({ type: 'getConnectionStatus' });
-    if (connectedTabId) {
-      const tab = await chrome.tabs.get(connectedTabId);
-      setStatus({
-        isConnected: true,
-        connectedTabId,
-        connectedTab: {
-          id: tab.id!,
-          windowId: tab.windowId!,
-          title: tab.title!,
-          url: tab.url!,
-          favIconUrl: tab.favIconUrl
+    const response = await chrome.runtime.sendMessage({ type: 'getConnectionStatus' });
+    const connectedTabIds: number[] = response.connectedTabIds ?? [];
+    const sessions: Record<string, number> = response.sessions ?? {};
+
+    // Reverse map: tabId → sessionId
+    const tabToSession: Record<number, string> = {};
+    for (const [sid, tabId] of Object.entries(sessions))
+      tabToSession[tabId] = sid;
+
+    if (connectedTabIds.length > 0) {
+      const tabs: ConnectedTab[] = [];
+      for (const tabId of connectedTabIds) {
+        try {
+          const tab = await chrome.tabs.get(tabId);
+          tabs.push({
+            id: tab.id!,
+            windowId: tab.windowId!,
+            title: tab.title!,
+            url: tab.url!,
+            favIconUrl: tab.favIconUrl,
+            sessionId: tabToSession[tabId],
+          });
+        } catch {
+          // Tab may have been closed between status query and get
         }
-      });
+      }
+      setStatus({ isConnected: true, connectedTabs: tabs });
     } else {
-      setStatus({
-        isConnected: false,
-        connectedTabId: null
-      });
+      setStatus({ isConnected: false, connectedTabs: [] });
     }
   };
 
-  const openConnectedTab = async () => {
-    if (!status.connectedTabId)
-      return;
-    await chrome.tabs.update(status.connectedTabId, { active: true });
+  const focusTab = async (tabId: number) => {
+    await chrome.tabs.update(tabId, { active: true });
     window.close();
   };
 
@@ -76,22 +86,25 @@ const StatusApp: React.FC = () => {
   return (
     <div className='app-container'>
       <div className='content-wrapper'>
-        {status.isConnected && status.connectedTab ? (
+        {status.isConnected && status.connectedTabs.length > 0 ? (
           <div>
             <div className='tab-section-title'>
-              Page with connected MCP client:
+              {status.connectedTabs.length === 1 ? 'Page with connected MCP client:' : `${status.connectedTabs.length} pages with connected MCP clients:`}
             </div>
-            <div>
-              <TabItem
-                tab={status.connectedTab}
-                button={
-                  <Button variant='primary' onClick={disconnect}>
-                    Disconnect
-                  </Button>
-                }
-                onClick={openConnectedTab}
-              />
-            </div>
+            {status.connectedTabs.map(tab => (
+              <div key={tab.id}>
+                <TabItem
+                  tab={tab}
+                  sessionId={tab.sessionId}
+                  button={
+                    <Button variant='primary' onClick={disconnect}>
+                      Disconnect
+                    </Button>
+                  }
+                  onClick={() => focusTab(tab.id)}
+                />
+              </div>
+            ))}
           </div>
         ) : (
           <div className='status-banner'>

@@ -39,12 +39,14 @@ export const Button: React.FC<{ variant: 'primary' | 'default' | 'reject'; onCli
 
 export interface TabItemProps {
   tab: TabInfo;
+  sessionId?: string;
   onClick?: () => void;
   button?: React.ReactNode;
 }
 
 export const TabItem: React.FC<TabItemProps> = ({
   tab,
+  sessionId,
   onClick,
   button
 }) => {
@@ -60,6 +62,7 @@ export const TabItem: React.FC<TabItemProps> = ({
           {tab.title || 'Untitled'}
         </div>
         <div className='tab-url'>{tab.url}</div>
+        {sessionId && <div className='tab-session'>Session: {sessionId.slice(0, 8)}...</div>}
       </div>
       {button}
     </div>

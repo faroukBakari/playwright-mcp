@@ -12,7 +12,7 @@
 
 export type LogChannel = 'debugger' | 'relay' | 'lifecycle' | 'registry' | 'tabManager';
 type LogLevel = 'info' | 'warn' | 'error';
-export type LogEntry = { type: 'log:entry'; channel: string; level: string; message: string; ts: number };
+export type LogEntry = { type: 'log:entry'; channel: string; level: string; message: string; ts: number; sessionId?: string };
 
 const BUFFER_CAP = 100;
 let _buffer: LogEntry[] = [];
@@ -43,10 +43,12 @@ function format(message: string, args: unknown[]): string {
   return message + ' ' + args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
 }
 
-function emit(channel: LogChannel, level: LogLevel, consoleFn: (...args: unknown[]) => void, message: string, args: unknown[]): void {
+function emit(channel: LogChannel, level: LogLevel, consoleFn: (...args: unknown[]) => void, message: string, args: unknown[], sessionId?: string): void {
   const formatted = format(message, args);
   consoleFn(`[ext:${channel}]`, formatted);
   const entry: LogEntry = { type: 'log:entry', channel, level, message: formatted, ts: Date.now() };
+  if (sessionId)
+    entry.sessionId = sessionId;
   if (_send && _send(entry))
     return;
   _buffer.push(entry);
@@ -67,6 +69,22 @@ export function extWarn(channel: LogChannel, message: string, ...args: unknown[]
 export function extError(channel: LogChannel, message: string, ...args: unknown[]): void {
   // eslint-disable-next-line no-console
   emit(channel, 'error', console.error, message, args);
+}
+
+/** Session-scoped variants — attach sessionId to log entries for server-side filtering. */
+export function extLogS(channel: LogChannel, sessionId: string | undefined, message: string, ...args: unknown[]): void {
+  // eslint-disable-next-line no-console
+  emit(channel, 'info', console.log, message, args, sessionId);
+}
+
+export function extWarnS(channel: LogChannel, sessionId: string | undefined, message: string, ...args: unknown[]): void {
+  // eslint-disable-next-line no-console
+  emit(channel, 'warn', console.warn, message, args, sessionId);
+}
+
+export function extErrorS(channel: LogChannel, sessionId: string | undefined, message: string, ...args: unknown[]): void {
+  // eslint-disable-next-line no-console
+  emit(channel, 'error', console.error, message, args, sessionId);
 }
 
 // Test-only: reset internal state

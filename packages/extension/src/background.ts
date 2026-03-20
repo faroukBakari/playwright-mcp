@@ -84,8 +84,15 @@ class TabShareExtension {
             (error: any) => sendResponse({ success: false, error: error.message }));
         return true; // Return true to indicate that the response will be sent asynchronously
       case 'getConnectionStatus':
+        const sessions: Record<string, number> = {};
+        for (const tabId of this._connectedTabs) {
+          const sid = this._activeConnection?.tabManager.getSessionForTab(tabId);
+          if (sid)
+            sessions[sid] = tabId;
+        }
         sendResponse({
           connectedTabIds: [...this._connectedTabs],
+          sessions,
         });
         return false;
       case 'disconnect':
