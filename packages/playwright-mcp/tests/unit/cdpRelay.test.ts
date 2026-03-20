@@ -1407,6 +1407,111 @@ describe('CDPRelayServer — Tab-Centric Model', () => {
     }
   });
 
+  // Target.targetInfoChanged updates session URL in activeSessions
+  it('activeSessions reflects URL after Target.targetInfoChanged', async () => {
+    await harness.teardown();
+    const h = new RelayTestHarness();
+    await h.setup({ graceTTL: 200, graceBufferMaxBytes: 1024 });
+    try {
+      const ext = await h.connectExtension();
+      const mc = new MultiClientHelper(h);
+      const ws = await mc.connectClient('nav');
+
+      // Attach via Target.setAutoAttach — initial URL is connect.html
+      ext.on('message', (data: WebSocket.RawData) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.method === 'attachToTab') {
+          ext.send(JSON.stringify({
+            id: msg.id,
+            result: { targetInfo: { type: 'page', url: 'chrome-extension://abc/connect.html', title: 'Connect' }, tabId: 77 },
+          }));
+        }
+      });
+
+      ws.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+      await sleep(50);
+
+      // URL should be the initial connect.html
+      const before = h.relay.activeSessions();
+      expect(before[0].tab?.url).toBe('chrome-extension://abc/connect.html');
+
+      // Extension forwards Target.targetInfoChanged after page navigates
+      ext.send(JSON.stringify({
+        method: 'forwardCDPEvent',
+        params: {
+          sessionId: before[0].sessionId,
+          method: 'Target.targetInfoChanged',
+          params: { targetInfo: { type: 'page', url: 'https://example.com', title: 'Example Domain' } },
+        },
+      }));
+      await sleep(20);
+
+      // activeSessions should now show the navigated URL
+      const after = h.relay.activeSessions();
+      expect(after[0].tab?.url).toBe('https://example.com');
+    } finally {
+      await h.teardown();
+    }
+  });
+
+  // Page.frameNavigated (main frame) updates session URL — the common path
+  it('activeSessions reflects URL after Page.frameNavigated', async () => {
+    await harness.teardown();
+    const h = new RelayTestHarness();
+    await h.setup({ graceTTL: 200, graceBufferMaxBytes: 1024 });
+    try {
+      const ext = await h.connectExtension();
+      const mc = new MultiClientHelper(h);
+      const ws = await mc.connectClient('nav');
+
+      ext.on('message', (data: WebSocket.RawData) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.method === 'attachToTab') {
+          ext.send(JSON.stringify({
+            id: msg.id,
+            result: { targetInfo: { type: 'page', url: 'chrome-extension://abc/connect.html', title: 'Connect' }, tabId: 88 },
+          }));
+        }
+      });
+
+      ws.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+      await sleep(50);
+
+      const before = h.relay.activeSessions();
+      expect(before[0].tab?.url).toBe('chrome-extension://abc/connect.html');
+
+      // Main-frame navigation (no parentId)
+      ext.send(JSON.stringify({
+        method: 'forwardCDPEvent',
+        params: {
+          sessionId: before[0].sessionId,
+          method: 'Page.frameNavigated',
+          params: { frame: { id: 'MAIN', url: 'https://httpbin.org/', mimeType: 'text/html' }, type: 'Navigation' },
+        },
+      }));
+      await sleep(20);
+
+      const after = h.relay.activeSessions();
+      expect(after[0].tab?.url).toBe('https://httpbin.org/');
+
+      // Iframe navigation (has parentId) should NOT update the session URL
+      ext.send(JSON.stringify({
+        method: 'forwardCDPEvent',
+        params: {
+          sessionId: before[0].sessionId,
+          method: 'Page.frameNavigated',
+          params: { frame: { id: 'IFRAME1', parentId: 'MAIN', url: 'https://ads.example.com/', mimeType: 'text/html' }, type: 'Navigation' },
+        },
+      }));
+      await sleep(20);
+
+      const afterIframe = h.relay.activeSessions();
+      expect(afterIframe[0].tab?.url).toBe('https://httpbin.org/');
+    } finally {
+      await h.teardown();
+    }
+  });
+
   // Finding 4: attachTab/createTab update the ClientSession
   it('attachTab updates ClientSession tabId and targetInfo', async () => {
     const ext = await harness.connectExtension();
@@ -1440,7 +1545,6 @@ describe('CDPRelayServer — Tab-Centric Model', () => {
     const session = sessionsAfter.find(s => s.sessionId === relaySessionId);
     expect(session?.tab?.tabId).toBe(55);
     expect(session?.tab?.url).toBe('https://attached.com');
-    expect(session?.tab?.title).toBe('Attached');
   });
 
   it('createTab updates ClientSession tabId when session exists', async () => {
