@@ -54,10 +54,7 @@ class TabShareExtension {
         return;
       this._removeConnectedTab(tabId);
       this._activeConnection?.tabManager.removeByTab(tabId);
-      if (this._connectedTabs.size === 0) {
-        this._activeConnection?.close('All tabs disconnected');
-        this._activeConnection = undefined;
-      }
+      // Relay owns WebSocket lifecycle — do not close connection based on tab count.
     });
     // Reconcile registry on service worker restart
     tabRegistry.reconcile().catch(e => extLog('lifecycle', 'tabRegistry reconcile error:', e));
@@ -227,13 +224,9 @@ class TabShareExtension {
       return;
     this._removeConnectedTab(tabId);
     const removedSessionId = this._activeConnection?.tabManager.removeByTab(tabId);
-    // Notify relay about tab closure BEFORE potentially closing the connection
+    // Notify relay about tab closure — relay owns WebSocket lifecycle decisions.
     if (removedSessionId && this._activeConnection)
       this._activeConnection.sendTabClosed(removedSessionId, tabId);
-    if (this._connectedTabs.size === 0) {
-      this._activeConnection?.close('Browser tab closed');
-      this._activeConnection = undefined;
-    }
   }
 
   private _onTabActivated(activeInfo: chrome.tabs.TabActiveInfo) {
