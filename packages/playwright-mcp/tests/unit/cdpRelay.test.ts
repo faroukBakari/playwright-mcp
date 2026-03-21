@@ -384,13 +384,20 @@ describe('CDPRelayServer — Wave 2', () => {
       const ext2 = await h2.connectExtension();
       const pw2 = await h2.connectPlaywright();
 
-      // Simulate the attachToTab exchange: Playwright sends Target.setAutoAttach,
-      // relay calls attachToTab on extension. We respond with tabId.
+      // Simulate the createTab + attachToTab exchange: Playwright sends Target.setAutoAttach
+      // (deferred), then relay.createTab() triggers createTab on extension.
       const extMessages: any[] = [];
       ext2.on('message', (data: WebSocket.RawData) => {
         const msg = JSON.parse(data.toString());
         extMessages.push(msg);
-        // Respond to attachToTab with tabId
+        // Respond to createTab (deferred tab creation)
+        if (msg.method === 'createTab') {
+          ext2.send(JSON.stringify({
+            id: msg.id,
+            result: { tabId: 42, targetInfo: { type: 'page', url: 'https://example.com' } },
+          }));
+        }
+        // Respond to attachToTab (used during recoverSessions)
         if (msg.method === 'attachToTab') {
           ext2.send(JSON.stringify({
             id: msg.id,
@@ -399,8 +406,14 @@ describe('CDPRelayServer — Wave 2', () => {
         }
       });
 
-      // Trigger Target.setAutoAttach from Playwright side
+      // Trigger Target.setAutoAttach from Playwright side (deferred — no tab yet)
       pw2.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+      await sleep(30);
+
+      // Explicitly create tab via sideband (sends Target.attachedToTarget)
+      const sessions = h2.relay.activeSessions();
+      const sessionId = sessions[0]?.sessionId;
+      await h2.relay.createTab(sessionId!, 'https://example.com');
       await sleep(30);
 
       // Now disconnect extension
@@ -492,9 +505,15 @@ describe('CDPRelayServer — Wave 2', () => {
     const ext = await harness.connectExtension();
     const pw = await harness.connectPlaywright();
 
-    // Set up extension to respond to attachToTab with tabId
+    // Set up extension to respond to createTab (deferred) and attachToTab (recovery)
     ext.on('message', (data: WebSocket.RawData) => {
       const msg = JSON.parse(data.toString());
+      if (msg.method === 'createTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { tabId: 77, targetInfo: { type: 'page', url: 'https://example.com' } },
+        }));
+      }
       if (msg.method === 'attachToTab') {
         ext.send(JSON.stringify({
           id: msg.id,
@@ -503,8 +522,13 @@ describe('CDPRelayServer — Wave 2', () => {
       }
     });
 
-    // Trigger Target.setAutoAttach to create a session with cdpSessionId
+    // Trigger Target.setAutoAttach (deferred — no tab created yet)
     pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(30);
+
+    // Explicitly create tab via sideband to seed cdpSessionId for recoverSessions
+    const sessId = harness.relay.activeSessions()[0]?.sessionId;
+    await harness.relay.createTab(sessId!, 'https://example.com');
     await sleep(30);
 
     // Disconnect extension
@@ -548,9 +572,15 @@ describe('CDPRelayServer — Wave 2', () => {
     const ext = await harness.connectExtension();
     const pw = await harness.connectPlaywright();
 
-    // Set up extension to respond to attachToTab
+    // Set up extension to respond to createTab (deferred) and attachToTab (recovery)
     ext.on('message', (data: WebSocket.RawData) => {
       const msg = JSON.parse(data.toString());
+      if (msg.method === 'createTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { tabId: 77, targetInfo: { type: 'page', url: 'https://example.com' } },
+        }));
+      }
       if (msg.method === 'attachToTab') {
         ext.send(JSON.stringify({
           id: msg.id,
@@ -559,8 +589,13 @@ describe('CDPRelayServer — Wave 2', () => {
       }
     });
 
-    // Trigger Target.setAutoAttach to create a session with cdpSessionId
+    // Trigger Target.setAutoAttach (deferred — no tab yet)
     pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(30);
+
+    // Explicitly create tab via sideband to seed cdpSessionId
+    const sessId = harness.relay.activeSessions()[0]?.sessionId;
+    await harness.relay.createTab(sessId!, 'https://example.com');
     await sleep(30);
     expect(harness.relay.clientCount).toBe(1);
 
@@ -613,9 +648,15 @@ describe('CDPRelayServer — Wave 2', () => {
     const ext = await harness.connectExtension();
     const pw = await harness.connectPlaywright();
 
-    // Set up extension to respond to attachToTab
+    // Set up extension to respond to createTab (deferred) and attachToTab
     ext.on('message', (data: WebSocket.RawData) => {
       const msg = JSON.parse(data.toString());
+      if (msg.method === 'createTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { tabId: 77, targetInfo: { type: 'page', url: 'https://example.com' } },
+        }));
+      }
       if (msg.method === 'attachToTab') {
         ext.send(JSON.stringify({
           id: msg.id,
@@ -624,8 +665,13 @@ describe('CDPRelayServer — Wave 2', () => {
       }
     });
 
-    // Trigger Target.setAutoAttach to create a session with cdpSessionId
+    // Trigger Target.setAutoAttach (deferred)
     pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(30);
+
+    // Explicitly create tab to seed cdpSessionId for recoverSessions
+    const sessId = harness.relay.activeSessions()[0]?.sessionId;
+    await harness.relay.createTab(sessId!, 'https://example.com');
     await sleep(30);
 
     // Disconnect extension
@@ -766,12 +812,18 @@ describe('CDPRelayServer — Multi-Client', () => {
 
   it('CDP event routes to correct client by sessionId', async () => {
     const ext = await harness.connectExtension();
-    // Capture MCP-level sessionIds from attachToTab messages sent to extension
+    // Capture MCP-level sessionIds from createTab messages sent to extension
     const mcpSessionIds: string[] = [];
     ext.on('message', (data: WebSocket.RawData) => {
       const msg = JSON.parse(data.toString());
-      if (msg.method === 'attachToTab') {
+      if (msg.method === 'createTab') {
         mcpSessionIds.push(msg.params.sessionId);
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { tabId: 77, targetInfo: { type: 'page', url: 'https://example.com' } },
+        }));
+      }
+      if (msg.method === 'attachToTab') {
         ext.send(JSON.stringify({
           id: msg.id,
           result: { targetInfo: { type: 'page', url: 'https://example.com' }, tabId: msg.id * 10 },
@@ -783,10 +835,21 @@ describe('CDPRelayServer — Multi-Client', () => {
     await mc.connectClient('A');
     await mc.connectClient('B');
 
-    // Trigger Target.setAutoAttach for both clients
+    // Trigger Target.setAutoAttach for both clients (deferred)
     mc.wsFor('A')!.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
     await sleep(30);
+    // Create tab for client A via sideband
+    const sessionsAfterA = harness.relay.activeSessions();
+    const sessionAId = sessionsAfterA.find(s => s.tab === null)?.sessionId ?? sessionsAfterA[0]?.sessionId;
+    await harness.relay.createTab(sessionAId!, 'https://example.com');
+    await sleep(30);
+
     mc.wsFor('B')!.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(30);
+    // Create tab for client B via sideband
+    const sessionsAfterB = harness.relay.activeSessions();
+    const sessionBId = sessionsAfterB.find(s => s.tab === null)?.sessionId;
+    await harness.relay.createTab(sessionBId!, 'https://example.com');
     await sleep(30);
 
     expect(mcpSessionIds).toHaveLength(2);
@@ -813,6 +876,12 @@ describe('CDPRelayServer — Multi-Client', () => {
     const ext = await harness.connectExtension();
     ext.on('message', (data: WebSocket.RawData) => {
       const msg = JSON.parse(data.toString());
+      if (msg.method === 'createTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { tabId: 42, targetInfo: { type: 'page', url: 'https://example.com' } },
+        }));
+      }
       if (msg.method === 'attachToTab') {
         ext.send(JSON.stringify({
           id: msg.id,
@@ -827,7 +896,18 @@ describe('CDPRelayServer — Multi-Client', () => {
 
     mc.wsFor('A')!.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
     await sleep(30);
+    // Create tab for A via sideband — sends Target.attachedToTarget with unique sessionId
+    const afterA = harness.relay.activeSessions();
+    const sidA = afterA.find(s => s.tab === null)?.sessionId ?? afterA[0]?.sessionId;
+    await harness.relay.createTab(sidA!, 'about:blank');
+    await sleep(30);
+
     mc.wsFor('B')!.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(30);
+    // Create tab for B via sideband
+    const afterB = harness.relay.activeSessions();
+    const sidB = afterB.find(s => s.tab === null)?.sessionId;
+    await harness.relay.createTab(sidB!, 'about:blank');
     await sleep(30);
 
     const aAttach = mc.messagesFor('A').find(m => m.method === 'Target.attachedToTarget');
@@ -941,6 +1021,12 @@ describe('CDPRelayServer — sessionId routing', () => {
     ext.on('message', (data: WebSocket.RawData) => {
       const msg = JSON.parse(data.toString());
       extMessages.push(msg);
+      if (msg.method === 'createTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { tabId: 42, targetInfo: { type: 'page', url: 'https://example.com' } },
+        }));
+      }
       if (msg.method === 'attachToTab') {
         ext.send(JSON.stringify({
           id: msg.id,
@@ -951,13 +1037,19 @@ describe('CDPRelayServer — sessionId routing', () => {
 
     const pw = await harness.connectPlaywright();
     pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
-    await sleep(50);
+    await sleep(30);
 
-    const attachMsg = extMessages.find(m => m.method === 'attachToTab');
-    expect(attachMsg).toBeDefined();
+    // Explicitly create tab via sideband (deferred tab creation)
+    const sessions = harness.relay.activeSessions();
+    const sessionId = sessions[0]?.sessionId;
+    await harness.relay.createTab(sessionId!, 'about:blank');
+    await sleep(30);
+
+    const createMsg = extMessages.find(m => m.method === 'createTab');
+    expect(createMsg).toBeDefined();
     // sessionId should be a UUID string (auto-generated by relay when no query param)
-    expect(typeof attachMsg.params.sessionId).toBe('string');
-    expect(attachMsg.params.sessionId.length).toBeGreaterThan(0);
+    expect(typeof createMsg.params.sessionId).toBe('string');
+    expect(createMsg.params.sessionId.length).toBeGreaterThan(0);
   });
 
   it('extension events with sessionId route to correct client', async () => {
@@ -966,8 +1058,14 @@ describe('CDPRelayServer — sessionId routing', () => {
 
     ext.on('message', (data: WebSocket.RawData) => {
       const msg = JSON.parse(data.toString());
-      if (msg.method === 'attachToTab') {
+      if (msg.method === 'createTab') {
         sessionIds.push(msg.params.sessionId);
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { tabId: 77, targetInfo: { type: 'page', url: 'https://example.com' } },
+        }));
+      }
+      if (msg.method === 'attachToTab') {
         ext.send(JSON.stringify({
           id: msg.id,
           result: { targetInfo: { type: 'page', url: 'https://example.com' }, tabId: msg.id * 10 },
@@ -979,10 +1077,21 @@ describe('CDPRelayServer — sessionId routing', () => {
     await mc.connectClient('A');
     await mc.connectClient('B');
 
-    // Trigger Target.setAutoAttach for both
+    // Trigger Target.setAutoAttach for both (deferred — no tab yet)
     mc.wsFor('A')!.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
     await sleep(30);
+    // Create tab for client A via sideband
+    const sessionsAfterA = harness.relay.activeSessions();
+    const sessionAId = sessionsAfterA.find(s => s.tab === null)?.sessionId ?? sessionsAfterA[0]?.sessionId;
+    await harness.relay.createTab(sessionAId!, 'https://example.com');
+    await sleep(30);
+
     mc.wsFor('B')!.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(30);
+    // Create tab for client B via sideband
+    const sessionsAfterB = harness.relay.activeSessions();
+    const sessionBId = sessionsAfterB.find(s => s.tab === null)?.sessionId;
+    await harness.relay.createTab(sessionBId!, 'https://example.com');
     await sleep(30);
 
     expect(sessionIds).toHaveLength(2);
@@ -1011,6 +1120,12 @@ describe('CDPRelayServer — sessionId routing', () => {
     ext.on('message', (data: WebSocket.RawData) => {
       const msg = JSON.parse(data.toString());
       extMessages.push(msg);
+      if (msg.method === 'createTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { tabId: 42, targetInfo: { type: 'page', url: 'https://example.com' } },
+        }));
+      }
       if (msg.method === 'attachToTab') {
         ext.send(JSON.stringify({
           id: msg.id,
@@ -1025,13 +1140,16 @@ describe('CDPRelayServer — sessionId routing', () => {
     const mc = new MultiClientHelper(harness);
     await mc.connectClient('A');
 
-    // Trigger Target.setAutoAttach to seed tabId
+    // Trigger Target.setAutoAttach (deferred — no tab yet)
     mc.wsFor('A')!.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
     await sleep(30);
 
-    const attachMsg = extMessages.find(m => m.method === 'attachToTab');
-    const sessionIdA = attachMsg?.params?.sessionId;
+    // Explicitly create tab via sideband
+    const sessions = harness.relay.activeSessions();
+    const sessionIdA = sessions[0]?.sessionId;
     expect(sessionIdA).toBeDefined();
+    await harness.relay.createTab(sessionIdA!, 'about:blank');
+    await sleep(30);
 
     // Disconnect client A
     await mc.disconnectClient('A');
@@ -1050,6 +1168,12 @@ describe('CDPRelayServer — sessionId routing', () => {
     ext.on('message', (data: WebSocket.RawData) => {
       const msg = JSON.parse(data.toString());
       extMessages.push(msg);
+      if (msg.method === 'createTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { tabId: 42, targetInfo: { type: 'page', url: 'https://example.com' } },
+        }));
+      }
       if (msg.method === 'attachToTab') {
         ext.send(JSON.stringify({
           id: msg.id,
@@ -1065,8 +1189,11 @@ describe('CDPRelayServer — sessionId routing', () => {
     pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
     await sleep(30);
 
-    const attachMsg = extMessages.find(m => m.method === 'attachToTab');
-    const sessionId = attachMsg?.params?.sessionId;
+    // Explicitly create tab via sideband
+    const sessions = harness.relay.activeSessions();
+    const sessionId = sessions[0]?.sessionId;
+    await harness.relay.createTab(sessionId!, 'about:blank');
+    await sleep(30);
 
     // Send a CDP command
     pw.send(JSON.stringify({ id: 2, method: 'Runtime.evaluate', params: { expression: '1+1' } }));
@@ -1354,12 +1481,16 @@ describe('CDPRelayServer — Tab-Centric Model', () => {
       const mc2 = new MultiClientHelper(h);
       const wsA = await mc2.connectClient('A');
 
-      // Attach A via Target.setAutoAttach — gives it tab 42
-      const sessionAIds: string[] = [];
+      // Attach A via Target.setAutoAttach (deferred) then createTab — gives it tab 42
       ext2.on('message', (data: WebSocket.RawData) => {
         const msg = JSON.parse(data.toString());
+        if (msg.method === 'createTab') {
+          ext2.send(JSON.stringify({
+            id: msg.id,
+            result: { tabId: 42, targetInfo: { type: 'page', url: 'https://example.com', title: 'Example' } },
+          }));
+        }
         if (msg.method === 'attachToTab') {
-          sessionAIds.push(msg.params.sessionId);
           ext2.send(JSON.stringify({
             id: msg.id,
             result: { targetInfo: { type: 'page', url: 'https://example.com', title: 'Example' }, tabId: 42 },
@@ -1368,10 +1499,14 @@ describe('CDPRelayServer — Tab-Centric Model', () => {
       });
 
       wsA.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
-      await sleep(50);
+      await sleep(30);
 
-      expect(sessionAIds).toHaveLength(1);
-      const relaySessionA = sessionAIds[0];
+      // Get sessionId from activeSessions and create tab via sideband
+      const sessionsBeforeCreate = h.relay.activeSessions();
+      const relaySessionA = sessionsBeforeCreate[0]?.sessionId;
+      expect(relaySessionA).toBeDefined();
+      await h.relay.createTab(relaySessionA!, 'about:blank');
+      await sleep(30);
 
       // Verify A has tab 42 before bump
       const sessionsBefore = h.relay.activeSessions();
@@ -1417,9 +1552,15 @@ describe('CDPRelayServer — Tab-Centric Model', () => {
       const mc = new MultiClientHelper(h);
       const ws = await mc.connectClient('nav');
 
-      // Attach via Target.setAutoAttach — initial URL is connect.html
+      // Attach via Target.setAutoAttach (deferred) then createTab — initial URL is connect.html
       ext.on('message', (data: WebSocket.RawData) => {
         const msg = JSON.parse(data.toString());
+        if (msg.method === 'createTab') {
+          ext.send(JSON.stringify({
+            id: msg.id,
+            result: { tabId: 77, targetInfo: { type: 'page', url: msg.params?.url ?? 'chrome-extension://abc/connect.html', title: 'Connect' } },
+          }));
+        }
         if (msg.method === 'attachToTab') {
           ext.send(JSON.stringify({
             id: msg.id,
@@ -1429,7 +1570,13 @@ describe('CDPRelayServer — Tab-Centric Model', () => {
       });
 
       ws.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
-      await sleep(50);
+      await sleep(30);
+
+      // Create tab via sideband with the initial URL
+      const sessionsBeforeCreate = h.relay.activeSessions();
+      const navSessionId = sessionsBeforeCreate[0]?.sessionId;
+      await h.relay.createTab(navSessionId!, 'chrome-extension://abc/connect.html');
+      await sleep(30);
 
       // URL should be the initial connect.html
       const before = h.relay.activeSessions();
@@ -1466,6 +1613,12 @@ describe('CDPRelayServer — Tab-Centric Model', () => {
 
       ext.on('message', (data: WebSocket.RawData) => {
         const msg = JSON.parse(data.toString());
+        if (msg.method === 'createTab') {
+          ext.send(JSON.stringify({
+            id: msg.id,
+            result: { tabId: 88, targetInfo: { type: 'page', url: msg.params?.url ?? 'chrome-extension://abc/connect.html', title: 'Connect' } },
+          }));
+        }
         if (msg.method === 'attachToTab') {
           ext.send(JSON.stringify({
             id: msg.id,
@@ -1475,7 +1628,13 @@ describe('CDPRelayServer — Tab-Centric Model', () => {
       });
 
       ws.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
-      await sleep(50);
+      await sleep(30);
+
+      // Create tab via sideband with the initial URL
+      const sessionsBeforeCreate = h.relay.activeSessions();
+      const navSessionId = sessionsBeforeCreate[0]?.sessionId;
+      await h.relay.createTab(navSessionId!, 'chrome-extension://abc/connect.html');
+      await sleep(30);
 
       const before = h.relay.activeSessions();
       expect(before[0].tab?.url).toBe('chrome-extension://abc/connect.html');
@@ -1643,11 +1802,17 @@ describe('CDPRelayServer -- Per-Session Grace', () => {
     await harness.teardown();
   });
 
-  /** Wire up a standard extension handler that responds to attachToTab and detachTab. */
+  /** Wire up a standard extension handler that responds to createTab, attachToTab, and detachTab. */
   function wireExtension(ext: WebSocket, extMessages: any[], tabId: number = 42): void {
     ext.on('message', (data: WebSocket.RawData) => {
       const msg = JSON.parse(data.toString());
       extMessages.push(msg);
+      if (msg.method === 'createTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { tabId, targetInfo: { type: 'page', url: 'https://example.com' } },
+        }));
+      }
       if (msg.method === 'attachToTab') {
         ext.send(JSON.stringify({
           id: msg.id,
@@ -1669,8 +1834,12 @@ describe('CDPRelayServer -- Per-Session Grace', () => {
     pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
     await sleep(50);
 
-    // Verify tab was attached
-    expect(extMessages.some(m => m.method === 'attachToTab')).toBe(true);
+    // Create tab explicitly (deferred tab creation model)
+    await harness.relay.createTab('sess-A', 'https://example.com');
+    await sleep(30);
+
+    // Verify tab was created
+    expect(extMessages.some(m => m.method === 'createTab')).toBe(true);
 
     // Disconnect — enters per-session grace
     await harness.disconnect(pw);
@@ -1691,6 +1860,10 @@ describe('CDPRelayServer -- Per-Session Grace', () => {
     const pw = await harness.connectPlaywrightWithSessionId('sess-A');
     pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
     await sleep(50);
+
+    // Create tab explicitly (deferred tab creation model)
+    await harness.relay.createTab('sess-A', 'https://example.com');
+    await sleep(30);
 
     // Verify tab 42 is assigned
     const sessions1 = harness.relay.activeSessions();
@@ -1724,9 +1897,13 @@ describe('CDPRelayServer -- Per-Session Grace', () => {
     pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
     await sleep(50);
 
-    // Count attachToTab calls — should be 1 so far
-    const attachCount1 = extMessages.filter(m => m.method === 'attachToTab').length;
-    expect(attachCount1).toBe(1);
+    // Create tab explicitly (deferred tab creation model)
+    await harness.relay.createTab('sess-A', 'https://example.com');
+    await sleep(30);
+
+    // Count createTab calls — should be 1 so far
+    const createCount1 = extMessages.filter(m => m.method === 'createTab').length;
+    expect(createCount1).toBe(1);
 
     // Disconnect and reconnect within grace
     await harness.disconnect(pw);
@@ -1742,9 +1919,9 @@ describe('CDPRelayServer -- Per-Session Grace', () => {
     pw2.send(JSON.stringify({ id: 2, method: 'Target.setAutoAttach', params: {} }));
     await sleep(50);
 
-    // No NEW attachToTab should have been sent to extension
-    const attachCount2 = extMessages.filter(m => m.method === 'attachToTab').length;
-    expect(attachCount2).toBe(1); // still just the original one
+    // No NEW createTab should have been sent to extension (cached targetInfo path)
+    const createCount2 = extMessages.filter(m => m.method === 'createTab').length;
+    expect(createCount2).toBe(1); // still just the original one
 
     // Client should receive Target.attachedToTarget with cached data
     const attachedMsg = pw2Messages.find(m => m.method === 'Target.attachedToTarget');
@@ -1761,6 +1938,10 @@ describe('CDPRelayServer -- Per-Session Grace', () => {
     const pw = await harness.connectPlaywrightWithSessionId('sess-A');
     pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
     await sleep(50);
+
+    // Create tab explicitly (deferred tab creation model)
+    await harness.relay.createTab('sess-A', 'https://example.com');
+    await sleep(30);
 
     // Disconnect — enters per-session grace
     await harness.disconnect(pw);
@@ -1785,6 +1966,10 @@ describe('CDPRelayServer -- Per-Session Grace', () => {
     const pw = await harness.connectPlaywrightWithSessionId('sess-A');
     pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
     await sleep(50);
+
+    // Create tab explicitly (deferred tab creation model)
+    await harness.relay.createTab('sess-A', 'https://example.com');
+    await sleep(30);
 
     const sessions1 = harness.relay.activeSessions();
     const sessA = sessions1.find(s => s.sessionId === 'sess-A');
@@ -1856,6 +2041,10 @@ describe('CDPRelayServer -- Per-Session Grace', () => {
     pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
     await sleep(50);
 
+    // Create tab explicitly (deferred tab creation model)
+    await harness.relay.createTab('sess-A', 'https://example.com');
+    await sleep(30);
+
     const sessions1 = harness.relay.activeSessions();
     expect(sessions1[0].tab?.tabId).toBe(42);
 
@@ -1922,11 +2111,17 @@ describe('CDPRelayServer -- Dormant Sessions', () => {
     await harness.teardown();
   });
 
-  /** Wire up a standard extension handler that responds to attachToTab and detachTab. */
+  /** Wire up a standard extension handler that responds to createTab, attachToTab, and detachTab. */
   function wireExtension(ext: WebSocket, extMessages: any[], tabId: number = 42): void {
     ext.on('message', (data: WebSocket.RawData) => {
       const msg = JSON.parse(data.toString());
       extMessages.push(msg);
+      if (msg.method === 'createTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { tabId, targetInfo: { type: 'page', url: 'https://example.com' } },
+        }));
+      }
       if (msg.method === 'attachToTab') {
         ext.send(JSON.stringify({
           id: msg.id,
@@ -1939,12 +2134,23 @@ describe('CDPRelayServer -- Dormant Sessions', () => {
     });
   }
 
-  /** Wire up an extension handler that returns incrementing tabIds per attachToTab call. */
+  /** Wire up an extension handler that returns incrementing tabIds per createTab/attachToTab call. */
   function wireExtensionMultiTab(ext: WebSocket, extMessages: any[], tabIdMap: Map<string, number>): void {
     let tabCounter = 100;
     ext.on('message', (data: WebSocket.RawData) => {
       const msg = JSON.parse(data.toString());
       extMessages.push(msg);
+      if (msg.method === 'createTab') {
+        const sessionId = msg.params?.sessionId as string;
+        if (!tabIdMap.has(sessionId)) {
+          tabIdMap.set(sessionId, tabCounter++);
+        }
+        const assignedTabId = tabIdMap.get(sessionId)!;
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { tabId: assignedTabId, targetInfo: { type: 'page', url: 'https://example.com' } },
+        }));
+      }
       if (msg.method === 'attachToTab') {
         const sessionId = msg.params?.sessionId as string;
         if (!tabIdMap.has(sessionId)) {
@@ -1971,8 +2177,12 @@ describe('CDPRelayServer -- Dormant Sessions', () => {
     pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
     await sleep(50);
 
-    // Verify tab was attached
-    expect(extMessages.some(m => m.method === 'attachToTab')).toBe(true);
+    // Create tab explicitly (deferred tab creation model)
+    await harness.relay.createTab('sess-A', 'https://example.com');
+    await sleep(30);
+
+    // Verify tab was created
+    expect(extMessages.some(m => m.method === 'createTab')).toBe(true);
 
     // Disconnect — enters per-session grace (100ms TTL)
     await harness.disconnect(pw);
@@ -2005,6 +2215,10 @@ describe('CDPRelayServer -- Dormant Sessions', () => {
     pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
     await sleep(50);
 
+    // Create tab explicitly (deferred tab creation model)
+    await harness.relay.createTab('sess-A', 'https://example.com');
+    await sleep(30);
+
     // Disconnect and wait for dormant
     await harness.disconnect(pw);
     await sleep(150);
@@ -2018,11 +2232,11 @@ describe('CDPRelayServer -- Dormant Sessions', () => {
     pw2.send(JSON.stringify({ id: 2, method: 'Target.setAutoAttach', params: {} }));
     await sleep(50);
 
-    // Extension should have received a second attachToTab with tabId 42
+    // Extension should have received attachToTab with tabId 42 on reconnect
+    // (initial tab was created via createTab, not attachToTab)
     const attachMsgs = extMessages.filter(m => m.method === 'attachToTab');
-    expect(attachMsgs.length).toBe(2);
-    const secondAttach = attachMsgs[1];
-    expect(secondAttach.params.tabId).toBe(42);
+    expect(attachMsgs.length).toBe(1);
+    expect(attachMsgs[0].params.tabId).toBe(42);
 
     // Session should be active now
     const activeSessions = harness.relay.activeSessions();
@@ -2040,6 +2254,10 @@ describe('CDPRelayServer -- Dormant Sessions', () => {
     const pw = await harness.connectPlaywrightWithSessionId('sess-A');
     pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
     await sleep(50);
+
+    // Create tab explicitly (deferred tab creation model)
+    await harness.relay.createTab('sess-A', 'https://example.com');
+    await sleep(30);
 
     // Disconnect and wait for dormant
     await harness.disconnect(pw);
@@ -2096,6 +2314,10 @@ describe('CDPRelayServer -- Dormant Sessions', () => {
     pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
     await sleep(50);
 
+    // Create tab explicitly (deferred tab creation model)
+    await harness.relay.createTab('sess-A', 'https://example.com');
+    await sleep(30);
+
     // Disconnect sess-A and wait for dormant
     await harness.disconnect(pw);
     await sleep(150);
@@ -2109,11 +2331,10 @@ describe('CDPRelayServer -- Dormant Sessions', () => {
     pw2.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
     await sleep(50);
 
-    // sess-B should trigger a NEW attachToTab without tabId 42
+    // sess-B should NOT trigger attachToTab — deferred tab creation means
+    // new sessions with no dormant tab get no immediate tab
     const attachMsgs = extMessages.filter(m => m.method === 'attachToTab');
-    const sessBAtt = attachMsgs[attachMsgs.length - 1];
-    expect(sessBAtt.params.sessionId).toBe('sess-B');
-    expect(sessBAtt.params.tabId).toBeUndefined();
+    expect(attachMsgs.length).toBe(0);
 
     // Dormant entry for sess-A should still exist
     const afterSessB = harness.relay.activeSessions();
@@ -2136,8 +2357,17 @@ describe('CDPRelayServer -- Dormant Sessions', () => {
 
     mc.wsFor('A')!.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
     await sleep(50);
+
+    // Create tab for sess-A explicitly (deferred tab creation model)
+    await harness.relay.createTab('sess-A', 'https://example.com');
+    await sleep(30);
+
     mc.wsFor('B')!.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
     await sleep(50);
+
+    // Create tab for sess-B explicitly (deferred tab creation model)
+    await harness.relay.createTab('sess-B', 'https://example.com');
+    await sleep(30);
 
     // Disconnect both and wait for dormant
     await mc.disconnectClient('A');
@@ -2169,13 +2399,19 @@ describe('CDPRelayServer -- Dormant Sessions', () => {
     const extMessages: any[] = [];
     let attachCallCount = 0;
 
-    // First attachToTab returns tab 42; second (after dormant reconnect) returns tab 99
+    // createTab returns tab 42; attachToTab on dormant reconnect returns tab 99
     ext.on('message', (data: WebSocket.RawData) => {
       const msg = JSON.parse(data.toString());
       extMessages.push(msg);
+      if (msg.method === 'createTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { tabId: 42, targetInfo: { type: 'page', url: 'https://example.com' } },
+        }));
+      }
       if (msg.method === 'attachToTab') {
         attachCallCount++;
-        const returnedTabId = attachCallCount === 1 ? 42 : 99;
+        const returnedTabId = attachCallCount === 1 ? 99 : 99;
         ext.send(JSON.stringify({
           id: msg.id,
           result: { targetInfo: { type: 'page', url: 'https://example.com' }, tabId: returnedTabId },
@@ -2190,6 +2426,10 @@ describe('CDPRelayServer -- Dormant Sessions', () => {
     pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
     await sleep(50);
 
+    // Create tab explicitly (deferred tab creation model)
+    await harness.relay.createTab('sess-A', 'https://example.com');
+    await sleep(30);
+
     // Disconnect and wait for dormant
     await harness.disconnect(pw);
     await sleep(150);
@@ -2199,10 +2439,11 @@ describe('CDPRelayServer -- Dormant Sessions', () => {
     pw2.send(JSON.stringify({ id: 2, method: 'Target.setAutoAttach', params: {} }));
     await sleep(50);
 
-    // Extension received a second attachToTab with the dormant tabId
+    // Extension received attachToTab with the dormant tabId on reconnect
+    // (initial tab was created via createTab, not attachToTab)
     const attachMsgs = extMessages.filter(m => m.method === 'attachToTab');
-    expect(attachMsgs.length).toBe(2);
-    expect(attachMsgs[1].params.tabId).toBe(42);
+    expect(attachMsgs.length).toBe(1);
+    expect(attachMsgs[0].params.tabId).toBe(42);
 
     // Session is active regardless of which tab the extension ultimately assigned
     const sessions = harness.relay.activeSessions();
@@ -2219,6 +2460,10 @@ describe('CDPRelayServer -- Dormant Sessions', () => {
     const pw = await harness.connectPlaywrightWithSessionId('sess-A');
     pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
     await sleep(50);
+
+    // Create tab explicitly (deferred tab creation model)
+    await harness.relay.createTab('sess-A', 'https://example.com');
+    await sleep(30);
 
     // Disconnect — per-session grace (100ms) AND server grace (500ms) both start
     await harness.disconnect(pw);
@@ -2251,6 +2496,10 @@ describe('CDPRelayServer -- Dormant Sessions', () => {
     pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
     await sleep(50);
 
+    // Create tab explicitly (deferred tab creation model)
+    await harness.relay.createTab('sess-A', 'https://example.com');
+    await sleep(30);
+
     // While active: clientCount=1, no dormant
     expect(harness.relay.clientCount).toBe(1);
     expect(harness.relay.dormantSessionCount).toBe(0);
@@ -2271,5 +2520,563 @@ describe('CDPRelayServer -- Dormant Sessions', () => {
         && !harness.relay.hasGracedSessions
         && harness.relay.dormantSessionCount === 0;
     expect(shouldPrepare).toBe(false);
+  });
+});
+
+describe('CDPRelayServer — Stale Page After Bump', () => {
+  let harness: RelayTestHarness;
+
+  beforeEach(async () => {
+    harness = new RelayTestHarness();
+    await harness.setup({ graceTTL: 500, graceBufferMaxBytes: 1024 });
+  });
+
+  afterEach(async () => {
+    await harness.teardown();
+  });
+
+  /**
+   * Wire extension that tracks tab ownership per session and supports bump semantics.
+   * When session B attaches to session A's tab, returns bumpedSessionId: A's sessionId.
+   */
+  function wireExtensionWithBump(ext: WebSocket, extMessages: any[]): void {
+    // Track which sessionId owns which tabId
+    const tabOwners = new Map<number, string>();
+    let tabCounter = 100;
+
+    ext.on('message', (data: WebSocket.RawData) => {
+      const msg = JSON.parse(data.toString());
+      extMessages.push(msg);
+
+      if (msg.method === 'createTab') {
+        const sessionId = msg.params?.sessionId as string;
+        const tabId = tabCounter++;
+        tabOwners.set(tabId, sessionId);
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: {
+            tabId,
+            targetInfo: { type: 'page', url: 'https://example.com', title: 'Example', targetId: `target-${tabId}` },
+          },
+        }));
+      }
+
+      if (msg.method === 'attachToTab') {
+        const sessionId = msg.params?.sessionId as string;
+        const tabId = msg.params?.tabId as number;
+        const previousOwner = tabOwners.get(tabId);
+        const bumpedSessionId = previousOwner && previousOwner !== sessionId ? previousOwner : undefined;
+        tabOwners.set(tabId, sessionId);
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: {
+            targetInfo: { type: 'page', url: 'https://example.com', title: 'Example', targetId: `target-${tabId}` },
+            tabId,
+            bumpedSessionId,
+          },
+        }));
+      }
+
+      if (msg.method === 'detachTab') {
+        ext.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+    });
+  }
+
+  it('bump notification sends Target.detachedFromTarget with targetId so Playwright can clean up the page', async () => {
+    // This test reproduces the "stale page after session bump" bug.
+    //
+    // Bug: When session B attaches to session A's tab, the relay sends
+    // Target.detachedFromTarget to session A — but the event only contains
+    // `sessionId` (the CDP child session ID), NOT `targetId`.
+    //
+    // CRBrowser._onDetachedFromTarget does: `const targetId = payload.targetId!`
+    // then `this._crPages.get(targetId)`. Without targetId, the lookup fails
+    // and the stale Page object is never destroyed. Subsequent tool calls on
+    // session A hang because they try to snapshot a page with a dead CDP
+    // connection (Runtime.callFunctionOn fails, Playwright retries with
+    // exponential backoff, hits 30s timeout).
+    //
+    // Expected: The detach event must include targetId so CRBrowser can
+    // find and destroy the CRPage.
+
+    const ext = await harness.connectExtension();
+    const extMessages: any[] = [];
+    wireExtensionWithBump(ext, extMessages);
+
+    const mc = new MultiClientHelper(harness);
+
+    // 1. Connect session A
+    const wsA = await mc.connectClientWithSessionId('A', 'sess-A');
+
+    // 2. Session A sends Target.setAutoAttach (deferred — relay returns empty)
+    wsA.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(30);
+
+    // 3. Create a tab for session A
+    const createResult = await harness.relay.createTab('sess-A', 'https://example.com');
+    const tabId = createResult.tabId;
+    await sleep(30);
+
+    // 4. Connect session B
+    const wsB = await mc.connectClientWithSessionId('B', 'sess-B');
+
+    // 5. Session B sends Target.setAutoAttach (deferred)
+    wsB.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(30);
+
+    // 6. Session B attaches to session A's tab (bump)
+    await harness.relay.attachTab('sess-B', tabId);
+    await sleep(50);
+
+    // 7. Verify: Session A received a Target.detachedFromTarget notification
+    const aMessages = mc.messagesFor('A');
+    const detachNotification = aMessages.find(
+      (m: any) => m.method === 'Target.detachedFromTarget'
+    );
+    expect(detachNotification).toBeDefined();
+
+    // 8. THE CRITICAL ASSERTION: The detach event must include targetId.
+    // CRBrowser._onDetachedFromTarget (crBrowser.ts:213) does:
+    //   const targetId = payload.targetId!;
+    //   const crPage = this._crPages.get(targetId);
+    // Without targetId, crPage is undefined, didClose() never fires,
+    // and the stale Page hangs all subsequent operations.
+    //
+    // This assertion FAILS with the current relay code — proving the bug.
+    // _notifyBumpedClient sends { sessionId, reason } but no targetId.
+    expect(detachNotification.params).toHaveProperty('targetId');
+    expect(detachNotification.params.targetId).toBeTruthy();
+  });
+
+  it('bump notification targetId matches the tab target so CRBrowser can look up the CRPage', async () => {
+    // Even if targetId is present, it must match the targetId from the
+    // original Target.attachedToTarget event so CRBrowser._crPages.get()
+    // finds the right CRPage.
+
+    const ext = await harness.connectExtension();
+    const extMessages: any[] = [];
+    wireExtensionWithBump(ext, extMessages);
+
+    const mc = new MultiClientHelper(harness);
+
+    // Connect session A, create tab
+    const wsA = await mc.connectClientWithSessionId('A', 'sess-A');
+    wsA.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(30);
+
+    const createResult = await harness.relay.createTab('sess-A', 'https://example.com');
+    const tabId = createResult.tabId;
+    await sleep(30);
+
+    // Capture the Target.attachedToTarget event that session A received
+    const aMessagesBeforeBump = mc.messagesFor('A');
+    const attachEvent = aMessagesBeforeBump.find(
+      (m: any) => m.method === 'Target.attachedToTarget'
+    );
+    expect(attachEvent).toBeDefined();
+    const originalTargetId = attachEvent.params?.targetInfo?.targetId;
+
+    // Connect session B, bump session A
+    const wsB = await mc.connectClientWithSessionId('B', 'sess-B');
+    wsB.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(30);
+    await harness.relay.attachTab('sess-B', tabId);
+    await sleep(50);
+
+    // The detach notification's targetId must match the original targetId
+    // from attachedToTarget so CRBrowser._crPages.get(targetId) succeeds
+    const aMessages = mc.messagesFor('A');
+    const detachNotification = aMessages.find(
+      (m: any) => m.method === 'Target.detachedFromTarget'
+    );
+    expect(detachNotification).toBeDefined();
+    // This FAILS: no targetId in the detach event at all
+    expect(detachNotification.params.targetId).toBe(originalTargetId);
+  });
+});
+
+describe('CDPRelayServer — Deferred Tab Creation', () => {
+  let harness: RelayTestHarness;
+
+  beforeEach(async () => {
+    harness = new RelayTestHarness();
+    await harness.setup({ graceTTL: 500, graceBufferMaxBytes: 1024, sessionGraceTTL: 100 });
+  });
+
+  afterEach(async () => {
+    await harness.teardown();
+  });
+
+  it('new session defers tab creation on Target.setAutoAttach', async () => {
+    const ext = await harness.connectExtension();
+    const extMessages: any[] = [];
+    ext.on('message', (data: WebSocket.RawData) => {
+      const msg = JSON.parse(data.toString());
+      extMessages.push(msg);
+      // Should NOT be called — respond anyway to avoid test hanging if it is called
+      if (msg.method === 'attachToTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { targetInfo: { type: 'page', url: 'https://example.com' }, tabId: 42 },
+        }));
+      }
+    });
+
+    const pw = await harness.connectPlaywrightWithSessionId('deferred-sess-1');
+    const pwMessages: any[] = [];
+    pw.on('message', (data: WebSocket.RawData) => {
+      pwMessages.push(JSON.parse(data.toString()));
+    });
+
+    pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+
+    // Relay should have responded with {} (the id response)
+    const idResponse = pwMessages.find(m => m.id === 1);
+    expect(idResponse).toBeDefined();
+    expect(idResponse.result).toEqual({});
+
+    // NO Target.attachedToTarget should have been sent
+    const attachedToTarget = pwMessages.find(m => m.method === 'Target.attachedToTarget');
+    expect(attachedToTarget).toBeUndefined();
+
+    // Extension's attachToTab should NOT have been called
+    const attachToTabMsg = extMessages.find(m => m.method === 'attachToTab');
+    expect(attachToTabMsg).toBeUndefined();
+  });
+
+  it('createTab sends Target.attachedToTarget after deferred creation', async () => {
+    const ext = await harness.connectExtension();
+    ext.on('message', (data: WebSocket.RawData) => {
+      const msg = JSON.parse(data.toString());
+      if (msg.method === 'createTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: {
+            tabId: 55,
+            url: msg.params.url || 'about:blank',
+            targetInfo: { type: 'page', url: msg.params.url || 'about:blank', title: 'New Tab' },
+          },
+        }));
+      }
+    });
+
+    const pw = await harness.connectPlaywrightWithSessionId('deferred-sess-2');
+    const pwMessages: any[] = [];
+    pw.on('message', (data: WebSocket.RawData) => {
+      pwMessages.push(JSON.parse(data.toString()));
+    });
+
+    // Trigger deferred path — no Target.attachedToTarget yet
+    pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+
+    const attachedBefore = pwMessages.find(m => m.method === 'Target.attachedToTarget');
+    expect(attachedBefore).toBeUndefined();
+
+    // Now call createTab — should trigger Target.attachedToTarget
+    await harness.relay.createTab('deferred-sess-2', 'https://example.com');
+    await sleep(50);
+
+    const attachedAfter = pwMessages.find(m => m.method === 'Target.attachedToTarget');
+    expect(attachedAfter).toBeDefined();
+    expect(attachedAfter.params.sessionId).toMatch(/^session-/);
+    expect(attachedAfter.params.targetInfo).toBeDefined();
+    expect(attachedAfter.params.targetInfo.type).toBe('page');
+  });
+
+  it('attachTab sends Target.attachedToTarget after deferred creation', async () => {
+    const ext = await harness.connectExtension();
+    ext.on('message', (data: WebSocket.RawData) => {
+      const msg = JSON.parse(data.toString());
+      if (msg.method === 'attachToTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: {
+            targetInfo: { type: 'page', url: 'https://example.com', title: 'Existing Tab' },
+            tabId: msg.params.tabId ?? 42,
+          },
+        }));
+      }
+    });
+
+    const pw = await harness.connectPlaywrightWithSessionId('deferred-sess-3');
+    const pwMessages: any[] = [];
+    pw.on('message', (data: WebSocket.RawData) => {
+      pwMessages.push(JSON.parse(data.toString()));
+    });
+
+    // Trigger deferred path
+    pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+
+    const attachedBefore = pwMessages.find(m => m.method === 'Target.attachedToTarget');
+    expect(attachedBefore).toBeUndefined();
+
+    // Call attachTab — should trigger Target.attachedToTarget
+    await harness.relay.attachTab('deferred-sess-3', 42);
+    await sleep(50);
+
+    const attachedAfter = pwMessages.find(m => m.method === 'Target.attachedToTarget');
+    expect(attachedAfter).toBeDefined();
+    expect(attachedAfter.params.sessionId).toMatch(/^session-/);
+    expect(attachedAfter.params.targetInfo).toBeDefined();
+    expect(attachedAfter.params.targetInfo.url).toBe('https://example.com');
+  });
+
+  it('graced session gets immediate Target.attachedToTarget on Target.setAutoAttach', async () => {
+    const ext = await harness.connectExtension();
+    const extMessages: any[] = [];
+    ext.on('message', (data: WebSocket.RawData) => {
+      const msg = JSON.parse(data.toString());
+      extMessages.push(msg);
+      if (msg.method === 'attachToTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { targetInfo: { type: 'page', url: 'https://example.com' }, tabId: 42 },
+        }));
+      }
+      if (msg.method === 'detachTab') {
+        ext.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+    });
+
+    // First connection — triggers normal attachToTab (or deferred, depending on behavior)
+    const pw = await harness.connectPlaywrightWithSessionId('grace-sess-1');
+    pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+
+    // Verify tab was attached (via createTab or direct attachToTab — give session tab state)
+    // For the grace path to work, session must have tabId + targetInfo.
+    // If deferred, we need to call createTab or attachTab first.
+    const sessionsBeforeDisconnect = harness.relay.activeSessions();
+    const sess = sessionsBeforeDisconnect.find(s => s.sessionId === 'grace-sess-1');
+    if (sess && sess.tab === null) {
+      // Session is deferred — establish tab binding via sideband so grace recovery works
+      await harness.relay.attachTab('grace-sess-1', 42);
+      await sleep(20);
+    }
+
+    // Verify session has a tab now
+    const sessionsWithTab = harness.relay.activeSessions();
+    const sessWithTab = sessionsWithTab.find(s => s.sessionId === 'grace-sess-1');
+    expect(sessWithTab?.tab?.tabId).toBe(42);
+
+    // Disconnect — enters per-session grace
+    await harness.disconnect(pw);
+
+    // Reconnect with same sessionId within grace TTL
+    const pw2 = await harness.connectPlaywrightWithSessionId('grace-sess-1');
+    const pw2Messages: any[] = [];
+    pw2.on('message', (data: WebSocket.RawData) => {
+      pw2Messages.push(JSON.parse(data.toString()));
+    });
+    await sleep(20);
+
+    // Clear previous attachment count from extension
+    const attachCountBefore = extMessages.filter(m => m.method === 'attachToTab').length;
+
+    // Send Target.setAutoAttach on reconnected session (grace recovery)
+    pw2.send(JSON.stringify({ id: 2, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+
+    // Grace recovery: Target.attachedToTarget should be sent immediately with cached data
+    const attachedMsg = pw2Messages.find(m => m.method === 'Target.attachedToTarget');
+    expect(attachedMsg).toBeDefined();
+    expect(attachedMsg.params.targetInfo.type).toBe('page');
+    expect(attachedMsg.params.targetInfo.url).toBe('https://example.com');
+
+    // No new attachToTab call to the extension (used cached data)
+    const attachCountAfter = extMessages.filter(m => m.method === 'attachToTab').length;
+    expect(attachCountAfter).toBe(attachCountBefore);
+  });
+});
+
+describe('CDPRelayServer — MV3 keepalive', () => {
+  let harness: RelayTestHarness;
+
+  beforeEach(async () => {
+    harness = new RelayTestHarness();
+    await harness.setup({ graceTTL: 500, extensionGraceTTL: 50 });
+  });
+
+  afterEach(async () => {
+    await harness.teardown();
+  });
+
+  it('keepalive messages from extension are silently ignored', async () => {
+    const ext = await harness.connectExtension();
+    const pw = await harness.connectPlaywright();
+
+    // Collect messages forwarded to the Playwright client
+    const pwMessages: any[] = [];
+    pw.on('message', (data: WebSocket.RawData) => {
+      pwMessages.push(JSON.parse(data.toString()));
+    });
+
+    // Send a keepalive from the extension (as the MV3 SW would)
+    ext.send(JSON.stringify({ type: 'keepalive' }));
+    await sleep(30);
+
+    // Keepalive must not be routed to the Playwright client
+    expect(pwMessages.filter(m => m.type === 'keepalive')).toHaveLength(0);
+    // Relay should remain connected (no error state)
+    expect(harness.relay.state).toBe('connected');
+  });
+
+  it('keepalive does not interfere with normal CDP messages', async () => {
+    const ext = await harness.connectExtension();
+    const pw = await harness.connectPlaywright();
+
+    const pwMessages: any[] = [];
+    pw.on('message', (data: WebSocket.RawData) => {
+      pwMessages.push(JSON.parse(data.toString()));
+    });
+
+    // Interleave keepalive with a real CDP event
+    ext.send(JSON.stringify({ type: 'keepalive' }));
+    ext.send(JSON.stringify({
+      method: 'forwardCDPEvent',
+      params: { method: 'Page.loadEventFired', params: { timestamp: 123 } },
+    }));
+    ext.send(JSON.stringify({ type: 'keepalive' }));
+    await sleep(30);
+
+    // Only the CDP event should reach the client
+    const cdpEvents = pwMessages.filter(m => m.method === 'Page.loadEventFired');
+    expect(cdpEvents).toHaveLength(1);
+    expect(pwMessages.filter(m => m.type === 'keepalive')).toHaveLength(0);
+  });
+});
+
+describe('deferred tab creation', () => {
+  let harness: RelayTestHarness;
+
+  beforeEach(async () => {
+    harness = new RelayTestHarness();
+    await harness.setup({ graceTTL: 50, graceBufferMaxBytes: 1024 });
+  });
+
+  afterEach(async () => {
+    await harness.teardown();
+  });
+
+  it('new session does not create tab on Target.setAutoAttach', async () => {
+    const ext = await harness.connectExtension();
+    const pw = await harness.connectPlaywrightWithSessionId('deferred-1');
+
+    // Track extension messages
+    const extMessages: any[] = [];
+    ext.on('message', (data: WebSocket.RawData) => {
+      const msg = JSON.parse(data.toString());
+      extMessages.push(msg);
+      // Respond to attachToTab in case it's called (it shouldn't be)
+      if (msg.method === 'attachToTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { targetInfo: { type: 'page', url: 'about:blank' }, tabId: 99 },
+        }));
+      }
+    });
+
+    // Track Playwright messages
+    const pwMessages: any[] = [];
+    pw.on('message', (data: WebSocket.RawData) => {
+      pwMessages.push(JSON.parse(data.toString()));
+    });
+
+    // Send Target.setAutoAttach
+    pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+
+    // Verify: relay returned the command response
+    const response = pwMessages.find(m => m.id === 1);
+    expect(response).toBeDefined();
+    expect(response.result).toEqual({});
+
+    // Verify: NO Target.attachedToTarget was sent
+    const attached = pwMessages.find(m => m.method === 'Target.attachedToTarget');
+    expect(attached).toBeUndefined();
+
+    // Verify: extension was NOT asked to attachToTab
+    const attachCall = extMessages.find(m => m.method === 'attachToTab');
+    expect(attachCall).toBeUndefined();
+  });
+
+  it('createTab sends Target.attachedToTarget after deferred creation', async () => {
+    const ext = await harness.connectExtension();
+    const pw = await harness.connectPlaywrightWithSessionId('deferred-2');
+
+    // Extension responds to createTab
+    ext.on('message', (data: WebSocket.RawData) => {
+      const msg = JSON.parse(data.toString());
+      if (msg.method === 'createTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { tabId: 55, targetInfo: { type: 'page', url: 'https://example.com', title: 'Example' } },
+        }));
+      }
+    });
+
+    const pwMessages: any[] = [];
+    pw.on('message', (data: WebSocket.RawData) => {
+      pwMessages.push(JSON.parse(data.toString()));
+    });
+
+    // Send Target.setAutoAttach (deferred — no tab)
+    pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+
+    // Verify deferred: no Target.attachedToTarget yet
+    expect(pwMessages.find(m => m.method === 'Target.attachedToTarget')).toBeUndefined();
+
+    // Now create tab via sideband
+    await harness.relay.createTab('deferred-2', 'https://example.com');
+    await sleep(30);
+
+    // Verify: Target.attachedToTarget WAS sent
+    const attached = pwMessages.find(m => m.method === 'Target.attachedToTarget');
+    expect(attached).toBeDefined();
+    expect(attached.params.targetInfo.url).toBe('https://example.com');
+    expect(attached.params.sessionId).toBe('session-deferred-2');
+  });
+
+  it('attachTab sends Target.attachedToTarget after deferred creation', async () => {
+    const ext = await harness.connectExtension();
+    const pw = await harness.connectPlaywrightWithSessionId('deferred-3');
+
+    // Extension responds to attachToTab
+    ext.on('message', (data: WebSocket.RawData) => {
+      const msg = JSON.parse(data.toString());
+      if (msg.method === 'attachToTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { tabId: msg.params.tabId, targetInfo: { type: 'page', url: 'https://attached.com', title: 'Attached' } },
+        }));
+      }
+    });
+
+    const pwMessages: any[] = [];
+    pw.on('message', (data: WebSocket.RawData) => {
+      pwMessages.push(JSON.parse(data.toString()));
+    });
+
+    // Send Target.setAutoAttach (deferred — no tab)
+    pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+
+    // Verify deferred
+    expect(pwMessages.find(m => m.method === 'Target.attachedToTarget')).toBeUndefined();
+
+    // Now attach to existing tab via sideband
+    await harness.relay.attachTab('deferred-3', 42);
+    await sleep(30);
+
+    // Verify: Target.attachedToTarget WAS sent
+    const attached = pwMessages.find(m => m.method === 'Target.attachedToTarget');
+    expect(attached).toBeDefined();
+    expect(attached.params.targetInfo.url).toBe('https://attached.com');
+    expect(attached.params.sessionId).toBe('session-deferred-3');
   });
 });

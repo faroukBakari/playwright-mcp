@@ -490,6 +490,52 @@ describe('RelayConnection', () => {
     });
   });
 
+  describe('keepalive', () => {
+    it('sends keepalive messages at 20s intervals', () => {
+      vi.useFakeTimers();
+      const freshWs = new MockWebSocket();
+      const conn = new RelayConnection(freshWs as any);
+
+      expect(freshWs.sent.filter(m => m.type === 'keepalive')).toHaveLength(0);
+
+      vi.advanceTimersByTime(20_000);
+      expect(freshWs.sent.filter(m => m.type === 'keepalive')).toHaveLength(1);
+
+      vi.advanceTimersByTime(20_000);
+      expect(freshWs.sent.filter(m => m.type === 'keepalive')).toHaveLength(2);
+
+      conn.close('done');
+      vi.useRealTimers();
+    });
+
+    it('stops keepalive on close', () => {
+      vi.useFakeTimers();
+      const freshWs = new MockWebSocket();
+      const conn = new RelayConnection(freshWs as any);
+
+      conn.close('done');
+      freshWs.sent.length = 0; // clear any messages from close
+
+      vi.advanceTimersByTime(40_000);
+      expect(freshWs.sent.filter(m => m.type === 'keepalive')).toHaveLength(0);
+
+      vi.useRealTimers();
+    });
+
+    it('does not send keepalive when WS is closed', () => {
+      vi.useFakeTimers();
+      const freshWs = new MockWebSocket();
+      const _conn = new RelayConnection(freshWs as any);
+
+      freshWs.readyState = MockWebSocket.CLOSED;
+      vi.advanceTimersByTime(20_000);
+
+      expect(freshWs.sent.filter(m => m.type === 'keepalive')).toHaveLength(0);
+
+      vi.useRealTimers();
+    });
+  });
+
   describe('error handling', () => {
     it('sends JSON-RPC error on malformed message', async () => {
       // Trigger with invalid JSON

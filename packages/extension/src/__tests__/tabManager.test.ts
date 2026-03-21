@@ -17,8 +17,10 @@ describe('TabManager', () => {
 
   describe('attach', () => {
     it('creates debuggee entry with correct tabId', () => {
-      const debuggee = tm.attach('client-1', 42);
-      expect(debuggee).toEqual({ tabId: 42 });
+      const result = tm.attach('client-1', 42);
+      expect(result.debuggee).toEqual({ tabId: 42 });
+      expect(result.bumpedSessionId).toBeUndefined();
+      expect(result.bumpedDebuggee).toBeUndefined();
       expect(tm.size).toBe(1);
     });
 

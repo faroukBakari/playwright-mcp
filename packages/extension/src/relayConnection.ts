@@ -42,6 +42,7 @@ export class RelayConnection {
   private _tabPromiseResolve!: () => void;
   private _pendingTabId: number | null = null;
   private _closed = false;
+  private _keepaliveInterval: ReturnType<typeof setInterval>;
 
   onclose?: () => void;
   onregistrymessage?: (message: any) => Promise<any>;
@@ -59,6 +60,13 @@ export class RelayConnection {
     chrome.debugger.onEvent.addListener(this._eventListener);
     // Wire extension log forwarding over this WS
     setSink((entry: LogEntry) => this._sendLog(entry));
+    // MV3 keepalive: send application-level messages every 20s to reset
+    // Chrome's service worker idle timer (~30s). Protocol-level ping/pong
+    // does NOT reset the timer — only ws.send()/onmessage do (Chrome 116+).
+    this._keepaliveInterval = setInterval(() => {
+      if (this._ws.readyState === WebSocket.OPEN)
+        this._ws.send(JSON.stringify({ type: 'keepalive' }));
+    }, 20_000);
   }
 
   /** Expose TabManager for background.ts tab closure handling. */
@@ -88,6 +96,7 @@ export class RelayConnection {
     if (this._closed)
       return;
     this._closed = true;
+    clearInterval(this._keepaliveInterval);
     clearSink();
     chrome.debugger.onEvent.removeListener(this._eventListener);
     void this._tabManager.detachAll();
@@ -318,6 +327,15 @@ export class RelayConnection {
           throw e;
         }
         this.ontabattach?.(tabId, sessionId);
+
+        // Get full targetInfo (targetId, browserContextId, etc.) — Playwright
+        // needs these fields in Target.attachedToTarget to create a Page.
+        const result: any = await chrome.debugger.sendCommand(debuggee, 'Target.getTargetInfo');
+        return {
+          tabId,
+          url: newTab.url || url,
+          targetInfo: result?.targetInfo,
+        };
       }
 
       return { tabId, url: newTab.url || url };
