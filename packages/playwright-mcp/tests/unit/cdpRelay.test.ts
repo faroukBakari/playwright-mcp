@@ -1909,3 +1909,367 @@ describe('CDPRelayServer -- Per-Session Grace', () => {
     expect(detachMsgs.length).toBe(0);
   });
 });
+
+describe('CDPRelayServer -- Dormant Sessions', () => {
+  let harness: RelayTestHarness;
+
+  beforeEach(async () => {
+    harness = new RelayTestHarness();
+    await harness.setup({ graceTTL: 500, graceBufferMaxBytes: 1024, sessionGraceTTL: 100 });
+  });
+
+  afterEach(async () => {
+    await harness.teardown();
+  });
+
+  /** Wire up a standard extension handler that responds to attachToTab and detachTab. */
+  function wireExtension(ext: WebSocket, extMessages: any[], tabId: number = 42): void {
+    ext.on('message', (data: WebSocket.RawData) => {
+      const msg = JSON.parse(data.toString());
+      extMessages.push(msg);
+      if (msg.method === 'attachToTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { targetInfo: { type: 'page', url: 'https://example.com' }, tabId },
+        }));
+      }
+      if (msg.method === 'detachTab') {
+        ext.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+    });
+  }
+
+  /** Wire up an extension handler that returns incrementing tabIds per attachToTab call. */
+  function wireExtensionMultiTab(ext: WebSocket, extMessages: any[], tabIdMap: Map<string, number>): void {
+    let tabCounter = 100;
+    ext.on('message', (data: WebSocket.RawData) => {
+      const msg = JSON.parse(data.toString());
+      extMessages.push(msg);
+      if (msg.method === 'attachToTab') {
+        const sessionId = msg.params?.sessionId as string;
+        if (!tabIdMap.has(sessionId)) {
+          tabIdMap.set(sessionId, tabCounter++);
+        }
+        const assignedTabId = tabIdMap.get(sessionId)!;
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { targetInfo: { type: 'page', url: 'https://example.com' }, tabId: assignedTabId },
+        }));
+      }
+      if (msg.method === 'detachTab') {
+        ext.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+    });
+  }
+
+  it('dormant: grace expiry sends detachTab and stores dormant entry', async () => {
+    const ext = await harness.connectExtension();
+    const extMessages: any[] = [];
+    wireExtension(ext, extMessages, 42);
+
+    const pw = await harness.connectPlaywrightWithSessionId('sess-A');
+    pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+
+    // Verify tab was attached
+    expect(extMessages.some(m => m.method === 'attachToTab')).toBe(true);
+
+    // Disconnect — enters per-session grace (100ms TTL)
+    await harness.disconnect(pw);
+
+    // Wait past grace TTL
+    await sleep(150);
+
+    // detachTab should have been sent to extension
+    const detachMsg = extMessages.find(m => m.method === 'detachTab');
+    expect(detachMsg).toBeDefined();
+    expect(detachMsg.params.sessionId).toBe('sess-A');
+
+    // Session should now be dormant
+    const sessions = harness.relay.activeSessions();
+    const dormantEntry = sessions.find(s => s.sessionId === 'sess-A');
+    expect(dormantEntry).toBeDefined();
+    expect(dormantEntry!.status).toBe('dormant');
+    expect(dormantEntry!.tab?.tabId).toBe(42);
+
+    // No active WS clients
+    expect(harness.relay.clientCount).toBe(0);
+  });
+
+  it('dormant: reconnect with same sessionId reattaches to same tab', async () => {
+    const ext = await harness.connectExtension();
+    const extMessages: any[] = [];
+    wireExtension(ext, extMessages, 42);
+
+    const pw = await harness.connectPlaywrightWithSessionId('sess-A');
+    pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+
+    // Disconnect and wait for dormant
+    await harness.disconnect(pw);
+    await sleep(150);
+
+    // Verify dormant state
+    const dormantSessions = harness.relay.activeSessions();
+    expect(dormantSessions.find(s => s.sessionId === 'sess-A')?.status).toBe('dormant');
+
+    // Reconnect with same sessionId
+    const pw2 = await harness.connectPlaywrightWithSessionId('sess-A');
+    pw2.send(JSON.stringify({ id: 2, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+
+    // Extension should have received a second attachToTab with tabId 42
+    const attachMsgs = extMessages.filter(m => m.method === 'attachToTab');
+    expect(attachMsgs.length).toBe(2);
+    const secondAttach = attachMsgs[1];
+    expect(secondAttach.params.tabId).toBe(42);
+
+    // Session should be active now
+    const activeSessions = harness.relay.activeSessions();
+    const sessA = activeSessions.find(s => s.sessionId === 'sess-A');
+    expect(sessA).toBeDefined();
+    expect(sessA!.status).toBe('active');
+    expect(sessA!.tab?.tabId).toBe(42);
+  });
+
+  it('dormant: tabClosed event cleans up dormant session', async () => {
+    const ext = await harness.connectExtension();
+    const extMessages: any[] = [];
+    wireExtension(ext, extMessages, 42);
+
+    const pw = await harness.connectPlaywrightWithSessionId('sess-A');
+    pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+
+    // Disconnect and wait for dormant
+    await harness.disconnect(pw);
+    await sleep(150);
+
+    // Verify dormant entry exists
+    const dormantSessions = harness.relay.activeSessions();
+    expect(dormantSessions.find(s => s.sessionId === 'sess-A')?.status).toBe('dormant');
+
+    // Simulate tabClosed from extension
+    ext.send(JSON.stringify({ method: 'tabClosed', params: { sessionId: 'sess-A', tabId: 42 } }));
+    await sleep(30);
+
+    // Dormant entry should be cleaned up
+    const afterClose = harness.relay.activeSessions();
+    expect(afterClose.find(s => s.sessionId === 'sess-A')).toBeUndefined();
+  });
+
+  it('dormant: tabClosed during grace prevents dormant entry', async () => {
+    const ext = await harness.connectExtension();
+    const extMessages: any[] = [];
+    wireExtension(ext, extMessages, 42);
+
+    const pw = await harness.connectPlaywrightWithSessionId('sess-A');
+    pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+
+    // Disconnect — enters grace (100ms TTL), NOT yet dormant
+    await harness.disconnect(pw);
+
+    // Wait 30ms (still within 100ms grace)
+    await sleep(30);
+
+    // Send tabClosed from extension while in grace
+    ext.send(JSON.stringify({ method: 'tabClosed', params: { sessionId: 'sess-A', tabId: 42 } }));
+
+    // Wait past original grace TTL
+    await sleep(120);
+
+    // No dormant entry should have been created
+    const sessions = harness.relay.activeSessions();
+    expect(sessions.find(s => s.sessionId === 'sess-A')).toBeUndefined();
+  });
+
+  it('dormant: different sessionId does not match dormant entry', async () => {
+    const ext = await harness.connectExtension();
+    const extMessages: any[] = [];
+    wireExtension(ext, extMessages, 42);
+
+    // Use a background client so sess-A disconnect doesn't trigger server-level grace disposal
+    const bgClient = await harness.connectPlaywrightWithSessionId('sess-bg');
+
+    const pw = await harness.connectPlaywrightWithSessionId('sess-A');
+    pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+
+    // Disconnect sess-A and wait for dormant
+    await harness.disconnect(pw);
+    await sleep(150);
+
+    // sess-A should be dormant
+    const dormantSessions = harness.relay.activeSessions();
+    expect(dormantSessions.find(s => s.sessionId === 'sess-A')?.status).toBe('dormant');
+
+    // Connect with DIFFERENT sessionId
+    const pw2 = await harness.connectPlaywrightWithSessionId('sess-B');
+    pw2.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+
+    // sess-B should trigger a NEW attachToTab without tabId 42
+    const attachMsgs = extMessages.filter(m => m.method === 'attachToTab');
+    const sessBAtt = attachMsgs[attachMsgs.length - 1];
+    expect(sessBAtt.params.sessionId).toBe('sess-B');
+    expect(sessBAtt.params.tabId).toBeUndefined();
+
+    // Dormant entry for sess-A should still exist
+    const afterSessB = harness.relay.activeSessions();
+    expect(afterSessB.find(s => s.sessionId === 'sess-A')?.status).toBe('dormant');
+
+    bgClient.close();
+  });
+
+  it('dormant: multiple dormant sessions coexist independently', async () => {
+    const ext = await harness.connectExtension();
+    const extMessages: any[] = [];
+    const tabIdMap = new Map<string, number>();
+    tabIdMap.set('sess-A', 42);
+    tabIdMap.set('sess-B', 43);
+    wireExtensionMultiTab(ext, extMessages, tabIdMap);
+
+    const mc = new MultiClientHelper(harness);
+    await mc.connectClientWithSessionId('A', 'sess-A');
+    await mc.connectClientWithSessionId('B', 'sess-B');
+
+    mc.wsFor('A')!.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+    mc.wsFor('B')!.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+
+    // Disconnect both and wait for dormant
+    await mc.disconnectClient('A');
+    await mc.disconnectClient('B');
+    await sleep(150);
+
+    // Both should be dormant
+    const dormantSessions = harness.relay.activeSessions();
+    const dormantA = dormantSessions.find(s => s.sessionId === 'sess-A');
+    const dormantB = dormantSessions.find(s => s.sessionId === 'sess-B');
+    expect(dormantA?.status).toBe('dormant');
+    expect(dormantB?.status).toBe('dormant');
+    expect(dormantA?.tab?.tabId).toBe(42);
+    expect(dormantB?.tab?.tabId).toBe(43);
+
+    // Reconnect only sess-A
+    await mc.connectClientWithSessionId('A', 'sess-A');
+    mc.wsFor('A')!.send(JSON.stringify({ id: 2, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+
+    // sess-A should be active, sess-B still dormant
+    const afterReconnect = harness.relay.activeSessions();
+    expect(afterReconnect.find(s => s.sessionId === 'sess-A')?.status).toBe('active');
+    expect(afterReconnect.find(s => s.sessionId === 'sess-B')?.status).toBe('dormant');
+  });
+
+  it('dormant: reconnect with dead tab falls through to fresh session via extension', async () => {
+    const ext = await harness.connectExtension();
+    const extMessages: any[] = [];
+    let attachCallCount = 0;
+
+    // First attachToTab returns tab 42; second (after dormant reconnect) returns tab 99
+    ext.on('message', (data: WebSocket.RawData) => {
+      const msg = JSON.parse(data.toString());
+      extMessages.push(msg);
+      if (msg.method === 'attachToTab') {
+        attachCallCount++;
+        const returnedTabId = attachCallCount === 1 ? 42 : 99;
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { targetInfo: { type: 'page', url: 'https://example.com' }, tabId: returnedTabId },
+        }));
+      }
+      if (msg.method === 'detachTab') {
+        ext.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+    });
+
+    const pw = await harness.connectPlaywrightWithSessionId('sess-A');
+    pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+
+    // Disconnect and wait for dormant
+    await harness.disconnect(pw);
+    await sleep(150);
+
+    // Reconnect — relay should send attachToTab with tabId 42 (from dormant)
+    const pw2 = await harness.connectPlaywrightWithSessionId('sess-A');
+    pw2.send(JSON.stringify({ id: 2, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+
+    // Extension received a second attachToTab with the dormant tabId
+    const attachMsgs = extMessages.filter(m => m.method === 'attachToTab');
+    expect(attachMsgs.length).toBe(2);
+    expect(attachMsgs[1].params.tabId).toBe(42);
+
+    // Session is active regardless of which tab the extension ultimately assigned
+    const sessions = harness.relay.activeSessions();
+    const sessA = sessions.find(s => s.sessionId === 'sess-A');
+    expect(sessA).toBeDefined();
+    expect(sessA!.status).toBe('active');
+  });
+
+  it('dormant: server grace expiry does not clear dormant sessions', async () => {
+    const ext = await harness.connectExtension();
+    const extMessages: any[] = [];
+    wireExtension(ext, extMessages, 42);
+
+    const pw = await harness.connectPlaywrightWithSessionId('sess-A');
+    pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+
+    // Disconnect — per-session grace (100ms) AND server grace (500ms) both start
+    await harness.disconnect(pw);
+
+    // Wait past per-session grace but NOT past server grace
+    await sleep(150);
+
+    // sess-A should be dormant
+    const afterPerSessionGrace = harness.relay.activeSessions();
+    expect(afterPerSessionGrace.find(s => s.sessionId === 'sess-A')?.status).toBe('dormant');
+
+    // Wait past server grace TTL (500ms total from disconnect)
+    await sleep(400);
+
+    // Dormant entry must survive server grace expiry
+    const afterServerGrace = harness.relay.activeSessions();
+    expect(afterServerGrace.find(s => s.sessionId === 'sess-A')?.status).toBe('dormant');
+  });
+
+  it('dormant: relay properties gate prepareForReconnect correctly', async () => {
+    // This test documents the guard contract used by createExtensionBrowser:
+    // prepareForReconnect() must NOT be called when dormant sessions exist,
+    // because it closes the extension WS — forcing a new connect.html tab
+    // on the next ensureExtensionConnectionForMCPContext call.
+    const ext = await harness.connectExtension();
+    const extMessages: any[] = [];
+    wireExtension(ext, extMessages, 42);
+
+    const pw = await harness.connectPlaywrightWithSessionId('sess-A');
+    pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+
+    // While active: clientCount=1, no dormant
+    expect(harness.relay.clientCount).toBe(1);
+    expect(harness.relay.dormantSessionCount).toBe(0);
+
+    // Disconnect and wait for dormant
+    await harness.disconnect(pw);
+    await sleep(150);
+
+    // After dormant: clientCount=0, hasGracedSessions=false, dormantSessionCount=1
+    // The guard condition: clientCount===0 && !hasGracedSessions && dormantSessionCount===0
+    // must be FALSE so prepareForReconnect is skipped.
+    expect(harness.relay.clientCount).toBe(0);
+    expect(harness.relay.hasGracedSessions).toBe(false);
+    expect(harness.relay.dormantSessionCount).toBe(1);
+
+    // Guard evaluates to false — dormant sessions prevent prepareForReconnect
+    const shouldPrepare = harness.relay.clientCount === 0
+        && !harness.relay.hasGracedSessions
+        && harness.relay.dormantSessionCount === 0;
+    expect(shouldPrepare).toBe(false);
+  });
+});

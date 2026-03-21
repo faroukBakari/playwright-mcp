@@ -79,6 +79,11 @@ export class RelayConnection {
     this._onClose();
   }
 
+  /** Notify relay that a tab was closed — triggers dormant session cleanup. */
+  sendTabClosed(sessionId: string, tabId: number): void {
+    this._sendMessage({ method: 'tabClosed', params: { sessionId, tabId } });
+  }
+
   private _onClose() {
     if (this._closed)
       return;
@@ -165,7 +170,15 @@ export class RelayConnection {
 
       let tabId: number;
       if (requestedTabId != null) {
-        tabId = requestedTabId;
+        // Verify tab still exists — it may have been closed while session was dormant
+        try {
+          await chrome.tabs.get(requestedTabId);
+          tabId = requestedTabId;
+        } catch {
+          extLogS('relay', sessionId, `Requested tab ${requestedTabId} gone, creating new tab`);
+          const newTab = await chrome.tabs.create({ active: true, url: 'about:blank' });
+          tabId = newTab.id!;
+        }
       } else if (this._tabManager.size === 0) {
         // First client — wait for popup tab selection
         await this._tabPromise;

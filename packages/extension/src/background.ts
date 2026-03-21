@@ -226,7 +226,10 @@ class TabShareExtension {
     if (!this._connectedTabs.has(tabId))
       return;
     this._removeConnectedTab(tabId);
-    this._activeConnection?.tabManager.removeByTab(tabId);
+    const removedSessionId = this._activeConnection?.tabManager.removeByTab(tabId);
+    // Notify relay about tab closure BEFORE potentially closing the connection
+    if (removedSessionId && this._activeConnection)
+      this._activeConnection.sendTabClosed(removedSessionId, tabId);
     if (this._connectedTabs.size === 0) {
       this._activeConnection?.close('Browser tab closed');
       this._activeConnection = undefined;
