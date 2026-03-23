@@ -349,14 +349,22 @@ export class RelayConnection {
     if (message.method === 'forwardCDPCommand') {
       const { cdpSessionId, method, params } = message.params;
       extLogS('relay', message.params?.sessionId, 'CDP command:', method, params);
+      const isDownload = method.includes('ownload');
+      if (isDownload)
+        extLogS('downloads', message.params?.sessionId, `chrome.debugger dispatching: ${method}`, params);
       const debuggerSession: chrome.debugger.DebuggerSession = {
         ...debuggee,
         sessionId: cdpSessionId,
       };
       // Forward CDP command to chrome.debugger, with retry on security-induced detach
       try {
-        return await chrome.debugger.sendCommand(debuggerSession, method, params);
+        const result = await chrome.debugger.sendCommand(debuggerSession, method, params);
+        if (isDownload)
+          extLogS('downloads', message.params?.sessionId, `chrome.debugger result: ${method}`, result);
+        return result;
       } catch (error: any) {
+        if (isDownload)
+          extLogS('downloads', message.params?.sessionId, `chrome.debugger FAILED: ${method}`, error.message);
         const pending = reattachPromise(debuggee.tabId!);
         if (!pending)
           throw error;
