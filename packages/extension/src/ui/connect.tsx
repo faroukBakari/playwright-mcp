@@ -27,7 +27,7 @@ type Status =
   | { type: 'error'; message: string }
   | { type: 'error'; versionMismatch: { extensionVersion: string; } };
 
-const SUPPORTED_PROTOCOL_VERSION = 6;
+const SUPPORTED_PROTOCOL_VERSION = 5;
 
 const ConnectApp: React.FC = () => {
   const [tabs, setTabs] = useState<TabInfo[]>([]);
