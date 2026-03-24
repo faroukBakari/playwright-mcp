@@ -341,6 +341,204 @@ export class RelayConnection {
       return { tabId, url: newTab.url || url };
     }
 
+    // ── Download commands (chrome.downloads API) ──────────────────────
+    if (message.method === 'Downloads.downloadFile') {
+      const { url, filename, timeout } = message.params || {};
+      if (!url)
+        return { error: 'url is required' };
+
+      const downloadTimeout = timeout || 30000;
+      const saveAsDetectMs = 3000;
+      const sessionId = message.params?.sessionId;
+
+      extLogS('downloads', sessionId, 'downloadFile: starting', { url, filename, timeout: downloadTimeout });
+
+      // 1. Initiate download
+      let downloadId: number;
+      try {
+        downloadId = await new Promise<number>((resolve, reject) => {
+          chrome.downloads.download(
+            { url, filename: filename || undefined, saveAs: false },
+            (id) => {
+              if (chrome.runtime.lastError)
+                reject(new Error(chrome.runtime.lastError.message));
+              else
+                resolve(id);
+            }
+          );
+        });
+      } catch (e: any) {
+        extLogS('downloads', sessionId, 'downloadFile: initiation failed', e.message);
+        return { error: e.message };
+      }
+
+      extLogS('downloads', sessionId, 'downloadFile: initiated', { downloadId });
+
+      // 2. Wait for completion with fast Save As detection
+      try {
+        const result = await new Promise<any>((resolve, reject) => {
+          let resolved = false;
+          let filenameReceived = false;
+
+          const cleanup = () => {
+            resolved = true;
+            clearTimeout(fullTimeoutId);
+            clearTimeout(saveAsTimerId);
+            chrome.downloads.onChanged.removeListener(listener);
+          };
+
+          const fullTimeoutId = setTimeout(() => {
+            if (!resolved) {
+              cleanup();
+              reject(new Error(
+                `Download timed out after ${downloadTimeout}ms. ` +
+                'Possible causes: (1) Chrome\'s "Ask where to save each file" is enabled — ' +
+                'disable it at chrome://settings/downloads. (2) Network issue or slow server. ' +
+                '(3) File too large — retry with a larger timeout.'
+              ));
+            }
+          }, downloadTimeout);
+
+          // Fast Save As detection: if no filename within 3s, the dialog is likely blocking
+          const saveAsTimerId = setTimeout(() => {
+            if (!filenameReceived && !resolved) {
+              cleanup();
+              reject(new Error(
+                'Download appears blocked by Chrome\'s "Ask where to save each file" dialog. ' +
+                'Disable this setting at chrome://settings/downloads, then retry.'
+              ));
+            }
+          }, saveAsDetectMs);
+
+          const listener = (delta: chrome.downloads.DownloadDelta) => {
+            if (delta.id !== downloadId || resolved)
+              return;
+
+            if (delta.filename?.current) {
+              filenameReceived = true;
+              clearTimeout(saveAsTimerId);
+              extLogS('downloads', sessionId, 'downloadFile: filename received', { filename: delta.filename.current });
+            }
+
+            if (delta.state?.current === 'complete') {
+              cleanup();
+              // Query final state for full metadata
+              chrome.downloads.search({ id: downloadId }, (items) => {
+                const item = items[0];
+                extLogS('downloads', sessionId, 'downloadFile: complete', { filename: item?.filename, fileSize: item?.fileSize });
+                resolve({
+                  downloadId,
+                  filename: item?.filename || '',
+                  fileSize: item?.fileSize || item?.bytesReceived || 0,
+                  state: 'complete',
+                  url: item?.url || url,
+                  mime: item?.mime || '',
+                });
+              });
+            } else if (delta.state?.current === 'interrupted') {
+              cleanup();
+              chrome.downloads.search({ id: downloadId }, (items) => {
+                const item = items[0];
+                extLogS('downloads', sessionId, 'downloadFile: interrupted', { error: item?.error });
+                reject(new Error(
+                  `Download interrupted: ${item?.error || 'unknown error'}. URL: ${url}`
+                ));
+              });
+            }
+          };
+
+          chrome.downloads.onChanged.addListener(listener);
+        });
+
+        return result;
+      } catch (e: any) {
+        extLogS('downloads', sessionId, 'downloadFile: failed', e.message);
+        throw e;
+      }
+    }
+
+    if (message.method === 'Downloads.listDownloads') {
+      const { query, state, limit } = message.params || {};
+      const sessionId = message.params?.sessionId;
+
+      extLogS('downloads', sessionId, 'listDownloads: querying', { query, state, limit });
+
+      const searchParams: chrome.downloads.DownloadQuery = {};
+      if (query)
+        searchParams.query = [query];
+      if (state)
+        searchParams.state = state as string;
+      searchParams.limit = limit || 20;
+      searchParams.orderBy = ['-startTime'];
+
+      const items = await new Promise<chrome.downloads.DownloadItem[]>((resolve) => {
+        chrome.downloads.search(searchParams, resolve);
+      });
+
+      extLogS('downloads', sessionId, 'listDownloads: found', { count: items.length });
+
+      return {
+        downloads: items.map(item => ({
+          id: item.id,
+          url: item.url,
+          filename: item.filename,
+          state: item.state,
+          fileSize: item.fileSize,
+          bytesReceived: item.bytesReceived,
+          startTime: item.startTime,
+          endTime: item.endTime,
+          mime: item.mime,
+          error: item.error,
+        })),
+      };
+    }
+
+    // TEMPORARY TEST COMMANDS — remove after chrome.downloads verification
+    if (message.method === 'Test.enableDownloadListeners') {
+      chrome.downloads.onCreated.addListener((item) => {
+        extLogS('downloads', message.params?.sessionId, `TEST: onCreated fired`, { id: item.id, url: item.url, filename: item.filename, state: item.state });
+      });
+      chrome.downloads.onChanged.addListener((delta) => {
+        extLogS('downloads', message.params?.sessionId, `TEST: onChanged fired`, delta);
+      });
+      extLogS('downloads', message.params?.sessionId, `TEST: download listeners registered`);
+      return { success: true };
+    }
+
+    if (message.method === 'Test.downloadWithSaveAsFalse') {
+      const testUrl = message.params?.url || 'https://httpbin.org/bytes/1024';
+      const testFilename = message.params?.filename || 'test-download.bin';
+      extLogS('downloads', message.params?.sessionId, `TEST: chrome.downloads.download starting`, { url: testUrl, filename: testFilename, saveAs: false });
+      try {
+        const downloadId = await new Promise<number>((resolve, reject) => {
+          chrome.downloads.download(
+            { url: testUrl, filename: testFilename, saveAs: false },
+            (id) => {
+              if (chrome.runtime.lastError) {
+                reject(new Error(chrome.runtime.lastError.message));
+              } else {
+                resolve(id);
+              }
+            }
+          );
+        });
+        extLogS('downloads', message.params?.sessionId, `TEST: chrome.downloads.download SUCCESS`, { downloadId });
+        const listener = (delta: chrome.downloads.DownloadDelta) => {
+          if (delta.id === downloadId) {
+            extLogS('downloads', message.params?.sessionId, `TEST: chrome.downloads.onChanged`, delta);
+            if (delta.state?.current === 'complete' || delta.state?.current === 'interrupted')
+              chrome.downloads.onChanged.removeListener(listener);
+          }
+        };
+        chrome.downloads.onChanged.addListener(listener);
+        return { success: true, downloadId };
+      } catch (error: any) {
+        extLogS('downloads', message.params?.sessionId, `TEST: chrome.downloads.download FAILED`, error.message);
+        return { success: false, error: error.message };
+      }
+    }
+    // END TEMPORARY TEST COMMANDS
+
     // For forwardCDPCommand, resolve debuggee via tabManager
     const debuggee = this._tabManager.getDebuggee(message.params?.sessionId);
     if (!debuggee?.tabId)
