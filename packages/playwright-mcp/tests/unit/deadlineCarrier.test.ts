@@ -1,0 +1,175 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// Import from compiled playwright-core (file: dependency)
+import { Context } from 'playwright-core/lib/tools/context';
+import { Tab } from 'playwright-core/lib/tools/tab';
+
+// ---------------------------------------------------------------------------
+// Context deadline state
+// ---------------------------------------------------------------------------
+
+describe('Context deadline state', () => {
+  it('remainingBudget returns Infinity when no deadline is set', () => {
+    const ctx = createStubContext();
+    expect(ctx.remainingBudget()).toBe(Infinity);
+  });
+
+  it('setDeadline sets a finite remaining budget', () => {
+    const ctx = createStubContext();
+    ctx.setDeadline(5000);
+    const remaining = ctx.remainingBudget();
+    expect(remaining).toBeGreaterThan(0);
+    expect(remaining).toBeLessThanOrEqual(5000);
+    expect(remaining).not.toBe(Infinity);
+  });
+
+  it('remainingBudget returns 0 when deadline is in the past', () => {
+    const ctx = createStubContext();
+    ctx.setDeadline(0); // deadline = Date.now() + 0 = now
+    // By the time remainingBudget() runs, Date.now() >= deadline
+    expect(ctx.remainingBudget()).toBe(0);
+  });
+
+  it('clearDeadline restores Infinity', () => {
+    const ctx = createStubContext();
+    ctx.setDeadline(5000);
+    expect(ctx.remainingBudget()).not.toBe(Infinity);
+    ctx.clearDeadline();
+    expect(ctx.remainingBudget()).toBe(Infinity);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tab getter deadline integration
+// ---------------------------------------------------------------------------
+
+describe('Tab timeout getters with deadline', () => {
+  it('returns ceiling when no deadline is set', () => {
+    const ctx = createStubContext({ timeouts: { action: 5000, navigation: 10000, expect: 3000 } });
+    const tab = createStubTab(ctx);
+
+    expect(tab.actionTimeoutOptions.timeout).toBe(5000);
+    expect(tab.navigationTimeoutOptions.timeout).toBe(10000);
+    expect(tab.expectTimeoutOptions.timeout).toBe(3000);
+  });
+
+  it('returns undefined when no ceiling and no deadline', () => {
+    const ctx = createStubContext({});
+    const tab = createStubTab(ctx);
+
+    expect(tab.actionTimeoutOptions.timeout).toBeUndefined();
+    expect(tab.navigationTimeoutOptions.timeout).toBeUndefined();
+    expect(tab.expectTimeoutOptions.timeout).toBeUndefined();
+  });
+
+  it('budget wins when smaller than ceiling', () => {
+    const ctx = createStubContext({ timeouts: { action: 5000 } });
+    const tab = createStubTab(ctx);
+
+    // Set a tight deadline — budget will be much smaller than ceiling
+    ctx.setDeadline(100);
+    const timeout = tab.actionTimeoutOptions.timeout!;
+    expect(timeout).toBeLessThanOrEqual(100);
+    expect(timeout).toBeLessThan(5000);
+  });
+
+  it('ceiling wins when budget has headroom', () => {
+    const ctx = createStubContext({ timeouts: { action: 5000 } });
+    const tab = createStubTab(ctx);
+
+    // Set a generous deadline — ceiling should win
+    ctx.setDeadline(30000);
+    expect(tab.actionTimeoutOptions.timeout).toBe(5000);
+  });
+
+  it('returns remaining budget when ceiling is undefined', () => {
+    const ctx = createStubContext({});
+    const tab = createStubTab(ctx);
+
+    ctx.setDeadline(3000);
+    const timeout = tab.actionTimeoutOptions.timeout!;
+    expect(timeout).toBeGreaterThan(0);
+    expect(timeout).toBeLessThanOrEqual(3000);
+  });
+
+  it('returns 0 when budget is exhausted', () => {
+    const ctx = createStubContext({ timeouts: { action: 5000 } });
+    const tab = createStubTab(ctx);
+
+    ctx.setDeadline(0); // immediate exhaustion
+    expect(tab.actionTimeoutOptions.timeout).toBe(0);
+  });
+
+  it('restores ceiling after clearDeadline', () => {
+    const ctx = createStubContext({ timeouts: { action: 5000, navigation: 10000, expect: 3000 } });
+    const tab = createStubTab(ctx);
+
+    ctx.setDeadline(100);
+    expect(tab.actionTimeoutOptions.timeout!).toBeLessThanOrEqual(100);
+
+    ctx.clearDeadline();
+    expect(tab.actionTimeoutOptions.timeout).toBe(5000);
+    expect(tab.navigationTimeoutOptions.timeout).toBe(10000);
+    expect(tab.expectTimeoutOptions.timeout).toBe(3000);
+  });
+
+  it('getter evaluates dynamically (not cached)', () => {
+    const ctx = createStubContext({ timeouts: { action: 5000 } });
+    const tab = createStubTab(ctx);
+
+    // No deadline — ceiling
+    expect(tab.actionTimeoutOptions.timeout).toBe(5000);
+
+    // Set tight deadline — budget wins
+    ctx.setDeadline(100);
+    expect(tab.actionTimeoutOptions.timeout!).toBeLessThanOrEqual(100);
+
+    // Set generous deadline — ceiling wins
+    ctx.setDeadline(30000);
+    expect(tab.actionTimeoutOptions.timeout).toBe(5000);
+
+    // Clear — back to ceiling
+    ctx.clearDeadline();
+    expect(tab.actionTimeoutOptions.timeout).toBe(5000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Helpers — minimal stubs that exercise the real Context/Tab deadline logic
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a real Context instance with a minimal stub browserContext.
+ * We need the real Context (not a plain object) because the deadline
+ * methods live on it.
+ */
+function createStubContext(configOverrides: Record<string, any> = {}) {
+  // Minimal playwright BrowserContext stub — just enough for Context constructor
+  const stubBrowserContext = {
+    pages: () => [],
+    on: () => {},
+    off: () => {},
+    route: async () => ({ dispose: async () => {} }),
+  } as any;
+
+  return new Context(stubBrowserContext, {
+    config: { ...configOverrides },
+    cwd: '/tmp',
+  });
+}
+
+/**
+ * Create a Tab that uses real getter logic but doesn't need a real Page.
+ * We access the getters via prototype to avoid the full constructor which
+ * requires a real Page with event emitters.
+ */
+function createStubTab(context: Context): Pick<Tab, 'actionTimeoutOptions' | 'navigationTimeoutOptions' | 'expectTimeoutOptions'> {
+  // Build a minimal object with the same prototype chain as Tab,
+  // setting just the fields the getters need.
+  const tab = Object.create(Tab.prototype);
+  tab.context = context;
+  tab._actionTimeoutCeiling = context.config.timeouts?.action;
+  tab._navigationTimeoutCeiling = context.config.timeouts?.navigation;
+  tab._expectTimeoutCeiling = context.config.timeouts?.expect;
+  return tab;
+}
