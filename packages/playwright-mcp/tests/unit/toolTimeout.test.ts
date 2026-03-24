@@ -11,17 +11,6 @@ const navigateTools: any[] = (navigateModule as any).default ?? navigateModule;
 // Universal tool timeout — dispatch-level enforcement
 // ---------------------------------------------------------------------------
 
-describe('BrowserServerBackend.DEFAULT_TIMEOUTS', () => {
-  it('defines defaults for all tool types', () => {
-    expect(BrowserServerBackend.DEFAULT_TIMEOUTS).toEqual({
-      readOnly: 5000,
-      input: 5000,
-      action: 5000,
-      assertion: 5000,
-    });
-  });
-});
-
 describe('BrowserServerBackend.NAVIGATE_TOOLS', () => {
   it('contains all navigation tool names', () => {
     const nav = BrowserServerBackend.NAVIGATE_TOOLS;
@@ -43,10 +32,24 @@ describe('BrowserServerBackend.NAVIGATE_TOOLS', () => {
 describe('_resolveTimeout (via prototype)', () => {
   // Access private method via prototype — bind to a mock with _config
   const resolve = BrowserServerBackend.prototype['_resolveTimeout'];
-  const noConfig = { _config: {} };
+  const noConfig = {
+    _config: {
+      timeoutMatrix: {
+        budget: { default: 5000, navigate: 15000, runCode: 30000 },
+        playwright: { action: 5000, navigation: 60000, expect: 5000 },
+        settle: { postActionDelay: 100, navigationLoad: 5000, networkRace: 3000, postSettlement: 10 },
+        infrastructure: { bridgeBuffer: 5000, extensionConnect: 5000, extensionCommand: 10000, sessionGrace: 15000 },
+      },
+    },
+  };
   const withConfig = {
     _config: {
-      toolTimeouts: { default: 8000, navigate: 20000, runCode: 45000 },
+      timeoutMatrix: {
+        budget: { default: 8000, navigate: 20000, runCode: 45000 },
+        playwright: { action: 5000, navigation: 60000, expect: 5000 },
+        settle: { postActionDelay: 100, navigationLoad: 5000, networkRace: 3000, postSettlement: 10 },
+        infrastructure: { bridgeBuffer: 5000, extensionConnect: 5000, extensionCommand: 10000, sessionGrace: 15000 },
+      },
     },
   };
 
@@ -84,15 +87,15 @@ describe('_resolveTimeout (via prototype)', () => {
     expect(resolve.call(noConfig, 'browser_run_code', 'action', 2)).toBe(2000);
   });
 
-  it('reads navigate timeout from config.toolTimeouts', () => {
+  it('reads navigate timeout from timeoutMatrix.budget', () => {
     expect(resolve.call(withConfig, 'browser_navigate', 'action', undefined)).toBe(20000);
   });
 
-  it('reads runCode timeout from config.toolTimeouts', () => {
+  it('reads runCode timeout from timeoutMatrix.budget', () => {
     expect(resolve.call(withConfig, 'browser_run_code', 'action', undefined)).toBe(45000);
   });
 
-  it('reads default timeout from config.toolTimeouts', () => {
+  it('reads default timeout from timeoutMatrix.budget', () => {
     expect(resolve.call(withConfig, 'browser_click', 'input', undefined)).toBe(8000);
   });
 
