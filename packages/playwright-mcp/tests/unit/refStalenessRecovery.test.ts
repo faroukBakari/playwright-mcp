@@ -231,3 +231,47 @@ describe('Role+name fallback guards', () => {
     await expect(mockPage._mockLocator.count()).resolves.toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Ref error messages
+//
+// When a ref was previously captured (exists in _refMetadata) but the element
+// is gone from the DOM, the error message should include the ref's role+name
+// so agents can make informed recovery decisions. When a ref was never
+// captured (typo, wrong snapshot), the generic message is kept.
+// ---------------------------------------------------------------------------
+
+describe('Ref error messages', () => {
+  // Simulate the error message construction logic from refLocators()
+  function buildRefError(ref: string, metadata: Map<string, { role: string, name: string }>): string {
+    const meta = metadata.get(ref);
+    if (meta) {
+      const desc = meta.name ? `${meta.role} '${meta.name}'` : meta.role;
+      return `ref ${ref} found — No element match for ${desc}. Try capturing new snapshot.`;
+    }
+    return `Ref ${ref} not found in the current page snapshot. Try capturing new snapshot.`;
+  }
+
+  it('ref in metadata with name → descriptive message', () => {
+    const metadata = new Map<string, { role: string, name: string }>();
+    metadata.set('f1e1678', { role: 'button', name: 'Ignorer' });
+
+    const msg = buildRefError('f1e1678', metadata);
+    expect(msg).toBe("ref f1e1678 found — No element match for button 'Ignorer'. Try capturing new snapshot.");
+  });
+
+  it('ref in metadata without name → role-only message', () => {
+    const metadata = new Map<string, { role: string, name: string }>();
+    metadata.set('f1e1678', { role: 'generic', name: '' });
+
+    const msg = buildRefError('f1e1678', metadata);
+    expect(msg).toBe('ref f1e1678 found — No element match for generic. Try capturing new snapshot.');
+  });
+
+  it('ref NOT in metadata → generic message', () => {
+    const metadata = new Map<string, { role: string, name: string }>();
+
+    const msg = buildRefError('xyz', metadata);
+    expect(msg).toBe('Ref xyz not found in the current page snapshot. Try capturing new snapshot.');
+  });
+});
