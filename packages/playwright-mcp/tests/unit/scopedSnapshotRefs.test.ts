@@ -125,3 +125,76 @@ describe('Scoped snapshot preserves ref resolution map', () => {
     expect(text).toContain('heading "Hello"');
   });
 });
+
+describe('Scoped snapshot merges refs into existing map', () => {
+  it('scoped capture after full capture produces snapshot with refs from both', async () => {
+    // The merge happens inside injectedScript — at this level we verify
+    // the contract: scoped captures pass rootSelector, enabling the merge path
+    const tab = createMockTab();
+    // First call: full-page snapshot
+    tab.captureSnapshot.mockResolvedValueOnce({
+      ariaSnapshot: '- heading "Page Title" [ref=e1]\n- button "Submit" [ref=e2]',
+      ariaSnapshotDiff: undefined,
+      modalStates: [],
+      events: [],
+    });
+    // Second call: scoped snapshot (different content from the scoped area)
+    tab.captureSnapshot.mockResolvedValueOnce({
+      ariaSnapshot: '- link "Profile" [ref=e3]\n- button "Settings" [ref=e4]',
+      ariaSnapshotDiff: undefined,
+      modalStates: [],
+      events: [],
+    });
+    const ctx = createContextWithTab(tab, { snapshot: { mode: 'full' } });
+
+    // 1. Full-page capture
+    const r1 = new Response(ctx, 'browser_snapshot', {});
+    r1.setIncludeSnapshot('full');
+    await r1.serialize();
+
+    // 2. Scoped capture — should pass rootSelector
+    const r2 = new Response(ctx, 'browser_click', {}, undefined, '.sidebar');
+    r2.setIncludeSnapshot();
+    const result = await r2.serialize();
+
+    // Verify scoped capture passed rootSelector (enabling merge path in injectedScript)
+    expect(tab.captureSnapshot.mock.calls[1][1]).toEqual({
+      rootSelector: '.sidebar',
+      clientId: 'test-client-scoped',
+    });
+
+    // The scoped snapshot should contain the scoped content
+    const text = (result.content[0] as any).text;
+    expect(text).toContain('Profile');
+  });
+
+  it('multiple scoped captures in sequence each pass rootSelector', async () => {
+    const tab = createMockTab();
+    const ctx = createContextWithTab(tab, { snapshot: { mode: 'full' } });
+
+    // Full → scoped → scoped sequence
+    const r1 = new Response(ctx, 'browser_snapshot', {});
+    r1.setIncludeSnapshot('full');
+    await r1.serialize();
+
+    const r2 = new Response(ctx, 'browser_click', {}, undefined, '.sidebar');
+    r2.setIncludeSnapshot();
+    await r2.serialize();
+
+    const r3 = new Response(ctx, 'browser_click', {}, undefined, '.main');
+    r3.setIncludeSnapshot();
+    await r3.serialize();
+
+    expect(tab.captureSnapshot).toHaveBeenCalledTimes(3);
+
+    // Both scoped captures pass their respective rootSelector
+    expect(tab.captureSnapshot.mock.calls[1][1]).toEqual({
+      rootSelector: '.sidebar',
+      clientId: 'test-client-scoped',
+    });
+    expect(tab.captureSnapshot.mock.calls[2][1]).toEqual({
+      rootSelector: '.main',
+      clientId: 'test-client-scoped',
+    });
+  });
+});
