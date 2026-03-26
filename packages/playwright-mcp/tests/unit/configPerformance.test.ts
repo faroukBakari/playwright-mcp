@@ -42,7 +42,7 @@ afterEach(() => {
 describe('defaultConfig.performance', () => {
   it('has all 11 fields with correct default values', () => {
     expect(defaultConfig.performance).toEqual({
-      postActionDelay: 100,
+      postActionDelay: 30,
       postSettlementDelay: 10,
       networkRaceTimeout: 3000,
       navigationLoadState: 'domcontentloaded',

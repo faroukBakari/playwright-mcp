@@ -37,7 +37,7 @@ describe('_resolveTimeout (via prototype)', () => {
       timeoutMatrix: {
         budget: { default: 5000, navigate: 15000, runCode: 30000 },
         playwright: { action: 5000, navigation: 60000, expect: 5000 },
-        settle: { postActionDelay: 100, navigationLoad: 5000, networkRace: 3000, postSettlement: 10 },
+        settle: { postActionDelay: 30, navigationLoad: 5000, networkRace: 3000, postSettlement: 10 },
         infrastructure: { bridgeBuffer: 5000, extensionConnect: 5000, extensionCommand: 10000, sessionGrace: 15000 },
       },
     },
@@ -47,7 +47,7 @@ describe('_resolveTimeout (via prototype)', () => {
       timeoutMatrix: {
         budget: { default: 8000, navigate: 20000, runCode: 45000 },
         playwright: { action: 5000, navigation: 60000, expect: 5000 },
-        settle: { postActionDelay: 100, navigationLoad: 5000, networkRace: 3000, postSettlement: 10 },
+        settle: { postActionDelay: 30, navigationLoad: 5000, networkRace: 3000, postSettlement: 10 },
         infrastructure: { bridgeBuffer: 5000, extensionConnect: 5000, extensionCommand: 10000, sessionGrace: 15000 },
       },
     },

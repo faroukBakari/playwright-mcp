@@ -46,7 +46,7 @@ describe('defaultConfig.performance wait knobs', () => {
 
   it('coexists with existing performance defaults', () => {
     // Ensure adding wait fields didn't break existing ones
-    expect(defaultConfig.performance.postActionDelay).toBe(100);
+    expect(defaultConfig.performance.postActionDelay).toBe(30);
     expect(defaultConfig.performance.postSettlementDelay).toBe(10);
     expect(defaultConfig.performance.networkRaceTimeout).toBe(3000);
   });
@@ -76,7 +76,7 @@ describe('mergeConfig wait knobs', () => {
     const result = mergeConfig(defaultConfig, {
       performance: { waitFastPollInterval: 100 },
     });
-    expect(result.performance.postActionDelay).toBe(100);
+    expect(result.performance.postActionDelay).toBe(30);
     expect(result.performance.networkRaceTimeout).toBe(3000);
     expect(result.performance.waitFastPollInterval).toBe(100);
   });
