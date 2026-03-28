@@ -96,6 +96,69 @@ describe('mergeConfig snapshot.interactableOnly', () => {
 // Patch 4e: snapshotSelector threading via Response
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// snapshot.includeUrls config + env var parsing
+// ---------------------------------------------------------------------------
+
+describe('PLAYWRIGHT_MCP_SNAPSHOT_INCLUDE_URLS env var', () => {
+  it('parses "true" into config.snapshot.includeUrls', () => {
+    process.env.PLAYWRIGHT_MCP_SNAPSHOT_INCLUDE_URLS = 'true';
+    const config = configFromEnv();
+    expect(config.snapshot?.includeUrls).toBe(true);
+  });
+
+  it('parses "false" into config.snapshot.includeUrls', () => {
+    process.env.PLAYWRIGHT_MCP_SNAPSHOT_INCLUDE_URLS = 'false';
+    const config = configFromEnv();
+    expect(config.snapshot?.includeUrls).toBe(false);
+  });
+
+  it('parses "0" into config.snapshot.includeUrls false', () => {
+    process.env.PLAYWRIGHT_MCP_SNAPSHOT_INCLUDE_URLS = '0';
+    const config = configFromEnv();
+    expect(config.snapshot?.includeUrls).toBe(false);
+  });
+
+  it('leaves includeUrls undefined when env var is not set', () => {
+    const config = configFromEnv();
+    expect(config.snapshot?.includeUrls).toBeUndefined();
+  });
+});
+
+describe('mergeConfig snapshot.includeUrls', () => {
+  it('deep-merges includeUrls into snapshot config', () => {
+    const result = mergeConfig(defaultConfig, {
+      snapshot: { includeUrls: false },
+    });
+    expect(result.snapshot?.includeUrls).toBe(false);
+  });
+
+  it('preserves other snapshot fields when includeUrls is set', () => {
+    const base = mergeConfig(defaultConfig, { snapshot: { mode: 'full', interactableOnly: true } });
+    const result = mergeConfig(base, { snapshot: { includeUrls: false } });
+    expect(result.snapshot?.mode).toBe('full');
+    expect(result.snapshot?.interactableOnly).toBe(true);
+    expect(result.snapshot?.includeUrls).toBe(false);
+  });
+
+  it('preserves includeUrls when other snapshot fields are overridden', () => {
+    const base = mergeConfig(defaultConfig, { snapshot: { includeUrls: false } });
+    const result = mergeConfig(base, { snapshot: { mode: 'incremental' } });
+    expect(result.snapshot?.includeUrls).toBe(false);
+    expect(result.snapshot?.mode).toBe('incremental');
+  });
+
+  it('defaults to true (undefined treated as true)', () => {
+    const result = mergeConfig(defaultConfig, {});
+    // undefined means "include URLs" — backwards compat
+    expect(result.snapshot?.includeUrls).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Patch 4e: snapshotSelector threading via Response
+// ---------------------------------------------------------------------------
+
 describe('Response snapshotSelector', () => {
   it('stores snapshotSelector from constructor', () => {
     const ctx = createStubContext({ snapshot: { mode: 'incremental' } });
