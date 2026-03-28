@@ -25,7 +25,14 @@ export default defineConfig<TestOptions>({
   workers: process.env.CI ? 2 : undefined,
   reporter: 'list',
   projects: [
-    { name: 'chrome' },
+    {
+      name: 'chrome',
+      use: {
+        // WSL: Google Chrome not at /opt/google/chrome/chrome.
+        // Use Playwright's bundled Chromium instead.
+        mcpBrowser: process.env.CI ? undefined : 'chromium',
+      },
+    },
     ...process.env.MCP_IN_DOCKER ? [{
       name: 'chromium-docker',
       grep: /browser_navigate|browser_click/,
