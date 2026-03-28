@@ -361,4 +361,31 @@ describe('empty diff handling', () => {
     expect(text).toContain('### Snapshot');
     expect(text).toContain('[no changes]');
   });
+
+  it('diff mode with empty tree does NOT emit no-changes (content removed)', async () => {
+    // Bug case: scoped element went from populated to empty (e.g. SPA navigation).
+    // Both ariaSnapshot and ariaSnapshotDiff are '' — content was removed, not unchanged.
+    const tab = {
+      captureSnapshot: vi.fn().mockResolvedValue({
+        ariaSnapshot: '',
+        ariaSnapshotDiff: '',
+        modalStates: [],
+        events: [],
+      }),
+      headerSnapshot: vi.fn().mockResolvedValue({
+        title: 'Test', url: 'https://example.com', current: true,
+        console: { total: 0, warnings: 0, errors: 0 }, changed: false,
+      }),
+    };
+    const ctx = createContextWithTab(tab);
+    const response = new Response(ctx, 'browser_click', {}, undefined, undefined, 'diff');
+    response.setIncludeSnapshot();
+    response.addTextResult('Clicked');
+    const result = await response.serialize();
+    const text = result.content[0].type === 'text' ? result.content[0].text : '';
+    // Must NOT say "no changes" — content was removed
+    expect(text).not.toContain('[no changes]');
+    // Should show something indicating an empty page
+    expect(text).toContain('[empty page]');
+  });
 });

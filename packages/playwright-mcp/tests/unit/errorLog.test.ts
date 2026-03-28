@@ -119,6 +119,34 @@ describe('ErrorLog', () => {
     log.close();
     log.close(); // should not throw
   });
+
+  it('includes timeout_ms and actual_ms when extras are provided', async () => {
+    const log = new ErrorLog(tmpDir);
+    log.setSession('sess-timeout');
+    const err = new Error('Tool "browser_navigate" timed out after 15000ms');
+    log.log('browser_navigate', 'call-t1', err, { timeout_ms: 15000, actual_ms: 15023 });
+    await closeAndFlush(log);
+
+    const files = fs.readdirSync(tmpDir);
+    const entry = JSON.parse(fs.readFileSync(path.join(tmpDir, files[0]), 'utf8').trim());
+    expect(entry).toMatchObject({
+      tool: 'browser_navigate',
+      callId: 'call-t1',
+      timeout_ms: 15000,
+      actual_ms: 15023,
+    });
+  });
+
+  it('omits timeout_ms and actual_ms when extras are not provided', async () => {
+    const log = new ErrorLog(tmpDir);
+    log.log('browser_click', 'call-no-extras', new Error('element not found'));
+    await closeAndFlush(log);
+
+    const files = fs.readdirSync(tmpDir);
+    const entry = JSON.parse(fs.readFileSync(path.join(tmpDir, files[0]), 'utf8').trim());
+    expect(entry.timeout_ms).toBeUndefined();
+    expect(entry.actual_ms).toBeUndefined();
+  });
 });
 
 describe('createErrorLog', () => {
