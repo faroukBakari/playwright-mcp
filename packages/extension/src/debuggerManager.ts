@@ -32,8 +32,8 @@ type TerminalDetachCallback = (tabId: number, reason: string) => void;
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 500;
 
-const TERMINAL_REASONS = new Set([
-  'canceled_by_user',
+const TERMINAL_REASONS: Set<string> = new Set([
+  // 'canceled_by_user',
 ]);
 
 // Delayed-terminal: one-shot reattach attempt after a delay. If reattach

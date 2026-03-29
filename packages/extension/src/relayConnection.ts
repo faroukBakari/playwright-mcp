@@ -103,13 +103,24 @@ export class RelayConnection {
     this.onclose?.();
   }
 
+  // High-frequency CDP events that are forwarded but not worth logging individually.
+  // These fire hundreds of times on busy pages (LinkedIn, etc.) and drown out
+  // actionable relay/lifecycle logs in the service worker console.
+  private static _quietCDPEvents = new Set([
+    'Network.requestWillBeSent', 'Network.responseReceived', 'Network.loadingFinished',
+    'Network.loadingFailed', 'Network.dataReceived', 'Network.requestWillBeSentExtraInfo',
+    'Network.responseReceivedExtraInfo', 'Network.requestServedFromCache',
+    'Log.entryAdded',
+  ]);
+
   private _onDebuggerEvent(source: chrome.debugger.DebuggerSession, method: string, params: any): void {
     if (source.tabId == null)
       return;
     const sessionId = this._tabManager.getSessionForTab(source.tabId);
     if (!sessionId)
       return;
-    extLogS('relay', sessionId, 'Forwarding CDP event:', method, params);
+    if (!RelayConnection._quietCDPEvents.has(method))
+      extLogS('relay', sessionId, 'Forwarding CDP event:', method, params);
     const cdpSessionId = source.sessionId;
     this._sendMessage({
       method: 'forwardCDPEvent',

@@ -204,16 +204,15 @@ describe('selector × mode combinations', () => {
     });
   });
 
-  it('none mode still captures snapshot for baseline advancement', async () => {
+  it('none mode skips captureSnapshot entirely', async () => {
     const tab = createMockTab();
     const ctx = createContextWithTab(tab);
     const response = new Response(ctx, 'browser_click', {});
     response.setIncludeSnapshot('none', '.main');
     response.addTextResult('Done');
     const result = await response.serialize();
-    // captureSnapshot must be called to advance baseline for future diffs
-    expect(tab.captureSnapshot).toHaveBeenCalled();
-    // but no Snapshot section in the response (mode is 'none')
+    // No capture when mode is none — protects management tools from page errors
+    expect(tab.captureSnapshot).not.toHaveBeenCalled();
     const text = result.content[0].type === 'text' ? result.content[0].text : '';
     expect(text).not.toContain('### Snapshot');
   });
