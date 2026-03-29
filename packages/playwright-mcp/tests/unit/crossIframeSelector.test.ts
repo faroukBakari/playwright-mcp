@@ -276,7 +276,7 @@ describe('selectorResolved success message in Response Result section', () => {
     response.setIncludeSnapshot('full');
     const callToolResult = await response.serialize();
     const parsed = parseResponse(callToolResult);
-    expect(parsed?.result).not.toContain('selectorResolved: true');
+    expect(parsed?.result ?? '').not.toContain('selectorResolved: true');
   });
 
   it('selectorResolved=true without snapshotSelector → no success message', async () => {
@@ -286,6 +286,6 @@ describe('selectorResolved success message in Response Result section', () => {
     response.setIncludeSnapshot('full');
     const callToolResult = await response.serialize();
     const parsed = parseResponse(callToolResult);
-    expect(parsed?.result).not.toContain('selectorResolved: true');
+    expect(parsed?.result ?? '').not.toContain('selectorResolved: true');
   });
 });
