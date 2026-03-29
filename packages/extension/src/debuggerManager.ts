@@ -14,7 +14,8 @@
  *                                Debounce 500ms, reattach, retry in-flight
  *                                commands. RelayConnection awaits
  *                                reattachPromise(tabId) to hold & retry commands.
- *   canceled_by_user           → mark detached, terminal (user opened DevTools)
+ *   canceled_by_user           → transient: reattach with backoff (Cancel only
+ *                                detaches chrome.debugger, WS stays alive)
  *   replaced_with_devtools     → delayed-terminal: one-shot reattach after 1s
  *                                (recovers from antivirus/extension interference;
  *                                 falls through to terminal if reattach fails)
@@ -32,8 +33,9 @@ type TerminalDetachCallback = (tabId: number, reason: string) => void;
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 500;
 
+// canceled_by_user intentionally excluded — Cancel only detaches chrome.debugger,
+// the WebSocket stays alive. Reattach succeeds in most cases. See docs/session-management.md.
 const TERMINAL_REASONS: Set<string> = new Set([
-  // 'canceled_by_user',
 ]);
 
 // Delayed-terminal: one-shot reattach attempt after a delay. If reattach
