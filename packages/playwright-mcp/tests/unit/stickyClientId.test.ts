@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 import { Response } from 'playwright-core/lib/tools/response';
+import { snapshotOptionsSchema } from 'playwright-core/lib/tools/snapshot';
 
 // Minimal context stub — same pattern as snapshotControl.test.ts
 function createStubContext(id: string = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee') {
@@ -32,5 +33,12 @@ describe('clientId removed from output', () => {
     expect(text).toContain('### Result');
     expect(text).toContain('Done');
     expect(text).not.toContain('clientId');
+  });
+
+  it('zod strips clientId from snapshotOptionsSchema (backward compat)', () => {
+    const input = { clientId: 'some-uuid', includeSnapshot: 'diff' as const };
+    const parsed = snapshotOptionsSchema.parse(input);
+    expect(parsed).not.toHaveProperty('clientId');
+    expect(parsed.includeSnapshot).toBe('diff');
   });
 });
