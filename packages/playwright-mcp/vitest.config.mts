@@ -4,8 +4,8 @@ import path from 'path';
 export default defineConfig({
   resolve: {
     alias: {
-      // Resolve through TypeScript source, not compiled lib/ — tsx handles .ts natively
-      'playwright-core/lib': path.resolve(__dirname, '../../../playwright/packages/playwright-core/src'),
+      // Bypass playwright-core's exports field to reach internal modules
+      'playwright-core/lib': path.resolve(__dirname, '../../../playwright/packages/playwright-core/lib'),
     },
   },
   test: {
