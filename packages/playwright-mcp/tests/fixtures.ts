@@ -210,7 +210,7 @@ async function createTransport(args: string[], mcpMode: TestOptions['mcpMode'], 
       DEBUG_HIDE_DATE: '1',
       PWMCP_PROFILES_DIR_FOR_TEST: profilesDir,
       ...(extensionToken ? { PLAYWRIGHT_MCP_EXTENSION_TOKEN: extensionToken } : {}),
-      // ia-custom: tests inject the published key into the manifest, producing the
+      // fork: tests inject the published key into the manifest, producing the
       // published extension ID. Tell the server to use it instead of our unpacked ID.
       PLAYWRIGHT_MCP_EXTENSION_ID: 'mmlmfjhmonkocbjadbfplnigmagldckm',
     },

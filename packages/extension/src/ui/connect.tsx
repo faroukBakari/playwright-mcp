@@ -89,7 +89,7 @@ const ConnectApp: React.FC = () => {
         return;
       }
 
-      // ia-custom: token authentication disabled during development.
+      // fork: token authentication disabled during development.
       // TODO: Re-enable token auth before production deployment.
       // Original flow: token match → auto-connect, invalid token → reject,
       // no token → manual approval UI. Now: always auto-connect.

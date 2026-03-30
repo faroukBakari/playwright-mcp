@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// ia-custom: adapted for auth bypass (auto-connect, no manual approval UI).
+// fork: adapted for auth bypass (auto-connect, no manual approval UI).
 // Original upstream tests required clicking Allow/Connect buttons and testing
 // token-based auth. With our bypass, all connections auto-connect immediately.
 // Tests that verified manual approval flow now verify auto-connect behavior.
@@ -203,7 +203,7 @@ const testWithOldExtensionVersion = test.extend({
   },
 });
 
-// ia-custom: With auth bypass, connections auto-connect immediately — no manual
+// fork: With auth bypass, connections auto-connect immediately — no manual
 // approval needed. Tests verify that navigation and snapshot work without any
 // user interaction on the connect page.
 
@@ -212,7 +212,7 @@ test(`navigate with extension (auto-connect)`, async ({ browserWithExtension, st
 
   const client = await startWithExtensionFlag(browserWithExtension, startClient);
 
-  // ia-custom: auth bypass means no Allow button to click — just issue the
+  // fork: auth bypass means no Allow button to click — just issue the
   // tool call and the extension auto-connects.
   expect(await client.callTool({
     name: 'browser_navigate',
@@ -230,7 +230,7 @@ test(`snapshot with auto-connect`, async ({ browserWithExtension, startClient, s
 
   const client = await startWithExtensionFlag(browserWithExtension, startClient);
 
-  // ia-custom: with auth bypass, snapshot auto-connects to the active tab
+  // fork: with auth bypass, snapshot auto-connects to the active tab
   // without showing the tab selector UI.
   expect(await client.callTool({
     name: 'browser_snapshot',
@@ -269,7 +269,7 @@ testWithOldExtensionVersion(`works with old extension version (auto-connect)`, a
 
   const client = await startWithExtensionFlag(browserWithExtension, startClient);
 
-  // ia-custom: old extension version should still auto-connect successfully.
+  // fork: old extension version should still auto-connect successfully.
   expect(await client.callTool({
     name: 'browser_navigate',
     arguments: { url: server.HELLO_WORLD },
@@ -332,12 +332,12 @@ test(`custom executablePath`, async ({ startClient, server, useShortConnectionTi
     error: expect.stringContaining('Extension connection timeout.'),
     isError: true,
   });
-  // ia-custom: extension ID comes from PLAYWRIGHT_MCP_EXTENSION_ID env var
+  // fork: extension ID comes from PLAYWRIGHT_MCP_EXTENSION_ID env var
   // (set in fixtures.ts to the published ID for test compatibility)
   expect(await fs.readFile(test.info().outputPath('output.txt'), 'utf8')).toMatch(new RegExp(`Custom exec args.*chrome-extension://${extensionId}/connect\\.html\\?`));
 });
 
-// ia-custom: Token auth is bypassed — connections auto-connect regardless of
+// fork: Token auth is bypassed — connections auto-connect regardless of
 // token presence. This test verifies that connections work without any token
 // (the common case in our dev setup).
 test(`auto-connect without token`, async ({ browserWithExtension, startClient, server }) => {
@@ -366,7 +366,7 @@ test.describe('CLI with extension', () => {
       }
     }, null, 2));
 
-    // ia-custom: with auth bypass, CLI auto-connects without needing to click
+    // fork: with auth bypass, CLI auto-connects without needing to click
     // the Connect button on the confirmation page.
     const { output } = await cli('open', server.HELLO_WORLD, '--extension', `--config=cli-config.json`);
 
