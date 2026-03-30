@@ -45,7 +45,7 @@ describe('Context deadline state', () => {
 
 describe('Tab timeout getters with deadline', () => {
   it('returns ceiling when no deadline is set', () => {
-    const ctx = createStubContext({ timeouts: { action: 5000, navigation: 10000, expect: 3000 } });
+    const ctx = createStubContext({ timeouts: { playwright: { action: 5000, navigation: 10000, expect: 3000 } } });
     const tab = createStubTab(ctx);
 
     expect(tab.actionTimeoutOptions.timeout).toBe(5000);
@@ -63,7 +63,7 @@ describe('Tab timeout getters with deadline', () => {
   });
 
   it('budget wins when smaller than ceiling', () => {
-    const ctx = createStubContext({ timeouts: { action: 5000 } });
+    const ctx = createStubContext({ timeouts: { playwright: { action: 5000 } } });
     const tab = createStubTab(ctx);
 
     // Set a tight deadline — budget will be much smaller than ceiling
@@ -74,7 +74,7 @@ describe('Tab timeout getters with deadline', () => {
   });
 
   it('ceiling wins when budget has headroom', () => {
-    const ctx = createStubContext({ timeouts: { action: 5000 } });
+    const ctx = createStubContext({ timeouts: { playwright: { action: 5000 } } });
     const tab = createStubTab(ctx);
 
     // Set a generous deadline — ceiling should win
@@ -93,7 +93,7 @@ describe('Tab timeout getters with deadline', () => {
   });
 
   it('returns 0 when budget is exhausted', () => {
-    const ctx = createStubContext({ timeouts: { action: 5000 } });
+    const ctx = createStubContext({ timeouts: { playwright: { action: 5000 } } });
     const tab = createStubTab(ctx);
 
     ctx.setDeadline(0); // immediate exhaustion
@@ -101,7 +101,7 @@ describe('Tab timeout getters with deadline', () => {
   });
 
   it('restores ceiling after clearDeadline', () => {
-    const ctx = createStubContext({ timeouts: { action: 5000, navigation: 10000, expect: 3000 } });
+    const ctx = createStubContext({ timeouts: { playwright: { action: 5000, navigation: 10000, expect: 3000 } } });
     const tab = createStubTab(ctx);
 
     ctx.setDeadline(100);
@@ -114,7 +114,7 @@ describe('Tab timeout getters with deadline', () => {
   });
 
   it('getter evaluates dynamically (not cached)', () => {
-    const ctx = createStubContext({ timeouts: { action: 5000 } });
+    const ctx = createStubContext({ timeouts: { playwright: { action: 5000 } } });
     const tab = createStubTab(ctx);
 
     // No deadline — ceiling
@@ -168,8 +168,8 @@ function createStubTab(context: Context): Pick<Tab, 'actionTimeoutOptions' | 'na
   // setting just the fields the getters need.
   const tab = Object.create(Tab.prototype);
   tab.context = context;
-  tab._actionTimeoutCeiling = context.config.timeouts?.action;
-  tab._navigationTimeoutCeiling = context.config.timeouts?.navigation;
-  tab._expectTimeoutCeiling = context.config.timeouts?.expect;
+  tab._actionTimeoutCeiling = context.config.timeouts?.playwright?.action;
+  tab._navigationTimeoutCeiling = context.config.timeouts?.playwright?.navigation;
+  tab._expectTimeoutCeiling = context.config.timeouts?.playwright?.expect;
   return tab;
 }

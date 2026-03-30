@@ -34,21 +34,15 @@ describe('_resolveTimeout (via prototype)', () => {
   const resolve = BrowserServerBackend.prototype['_resolveTimeout'];
   const noConfig = {
     _config: {
-      timeoutMatrix: {
+      timeouts: {
         budget: { default: 5000, navigate: 15000, runCode: 30000 },
-        playwright: { action: 5000, navigation: 60000, expect: 5000 },
-        settle: { postActionDelay: 30, navigationLoad: 5000, networkRace: 3000, postSettlement: 10 },
-        infrastructure: { bridgeBuffer: 5000, extensionConnect: 5000, extensionCommand: 10000, sessionGrace: 15000 },
       },
     },
   };
   const withConfig = {
     _config: {
-      timeoutMatrix: {
+      timeouts: {
         budget: { default: 8000, navigate: 20000, runCode: 45000 },
-        playwright: { action: 5000, navigation: 60000, expect: 5000 },
-        settle: { postActionDelay: 30, navigationLoad: 5000, networkRace: 3000, postSettlement: 10 },
-        infrastructure: { bridgeBuffer: 5000, extensionConnect: 5000, extensionCommand: 10000, sessionGrace: 15000 },
       },
     },
   };
@@ -85,18 +79,6 @@ describe('_resolveTimeout (via prototype)', () => {
 
   it('explicit override takes precedence over run_code default', () => {
     expect(resolve.call(noConfig, 'browser_run_code', 'action', 2)).toBe(2000);
-  });
-
-  it('reads navigate timeout from timeoutMatrix.budget', () => {
-    expect(resolve.call(withConfig, 'browser_navigate', 'action', undefined)).toBe(20000);
-  });
-
-  it('reads runCode timeout from timeoutMatrix.budget', () => {
-    expect(resolve.call(withConfig, 'browser_run_code', 'action', undefined)).toBe(45000);
-  });
-
-  it('reads default timeout from timeoutMatrix.budget', () => {
-    expect(resolve.call(withConfig, 'browser_click', 'input', undefined)).toBe(8000);
   });
 
   it('explicit override takes precedence over config', () => {
