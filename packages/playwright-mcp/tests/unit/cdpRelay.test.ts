@@ -781,6 +781,59 @@ describe('CDPRelayServer — Multi-Client', () => {
     }
   });
 
+  it.skip('slot freed after session browser closes (MCP disposal path)', async () => {
+    // SYMPTOM TEST — documents the relay-level consequence of the slot leak.
+    // This test cannot turn green at the relay layer because the fix is in
+    // program.ts (disposed callback calls removeSessionContext → closes browser
+    // → closes relay WS) + http.ts (30s idle timeout closes transport → triggers
+    // disposed). Verified end-to-end via server log lifecycle (2026-03-30).
+    //
+    // The relay correctly rejects when slots are full — that's not the bug.
+    // The bug was: nothing closed the browser/WS when the MCP session ended.
+    const capHarness = new RelayTestHarness();
+    await capHarness.setup({ graceTTL: 200, graceBufferMaxBytes: 1024, maxConcurrentClients: 2 });
+    try {
+      await capHarness.connectExtension();
+      const mc = new MultiClientHelper(capHarness);
+
+      // Fill both slots
+      await mc.connectClient('A');
+      await mc.connectClient('B');
+      await sleep(20);
+      expect(capHarness.relay.clientCount).toBe(2);
+
+      // Simulate MCP session disposal for client A: close the browser,
+      // which should close the relay WS and free the slot.
+      // TODAY: SharedBackendProxy.dispose() is a no-op, so we simulate
+      // what the FIXED disposed callback should do — close A's WS.
+      // The test asserts the CORRECT end state: slot is freed, new client accepted.
+      //
+      // NOTE: we intentionally do NOT close A's WS here. The test expects
+      // the relay to have freed the slot. Since it hasn't (the bug), the
+      // test FAILS — proving the slot leak.
+
+      // Try to connect client C — SHOULD succeed (slot A should be free)
+      const ws3 = new WebSocket(capHarness.relay.cdpEndpoint());
+      const result = await new Promise<{ accepted: boolean; closeCode?: number; closeReason?: string }>(resolve => {
+        let opened = false;
+        ws3.on('open', () => { opened = true; });
+        ws3.on('close', (code, reason) => {
+          resolve({ accepted: false, closeCode: code, closeReason: reason.toString() });
+        });
+        // If still open after 200ms, it was accepted
+        setTimeout(() => {
+          if (opened && ws3.readyState === WebSocket.OPEN)
+            resolve({ accepted: true });
+        }, 200);
+      });
+
+      // CORRECT BEHAVIOR: C is accepted because A's slot was freed on disposal
+      expect(result.accepted).toBe(true);
+    } finally {
+      await capHarness.teardown();
+    }
+  });
+
   it('CDP command routes response to correct client', async () => {
     const ext = await harness.connectExtension();
     ext.on('message', (data: WebSocket.RawData) => {
