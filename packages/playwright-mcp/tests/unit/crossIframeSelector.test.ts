@@ -254,8 +254,10 @@ function createContextWithTab(tab: ReturnType<typeof createMockTab>) {
   } as any;
 }
 
-describe('selectorResolved success message in Response Result section', () => {
-  it('selectorResolved=true + snapshotSelector → success message appears in Result', async () => {
+describe('selectorResolved message in Response Result section', () => {
+  it('selectorResolved=true + snapshotSelector → no noise message in Result', async () => {
+    // Successful scoped snapshots are silent — no confirmation message.
+    // Only the fallback (selectorResolved=false) emits a warning.
     const tab = createMockTab(true);
     const ctx = createContextWithTab(tab);
     const snapshotSelector = '.main-content';
@@ -263,9 +265,9 @@ describe('selectorResolved success message in Response Result section', () => {
     response.setIncludeSnapshot('full');
     const callToolResult = await response.serialize();
     const parsed = parseResponse(callToolResult);
-    expect(parsed?.result).toContain(
-      `selectorResolved: true — snapshotSelector '${snapshotSelector}' matched`
-    );
+    expect(parsed).toBeDefined();
+    expect(parsed!.result ?? '').not.toContain('selectorResolved');
+    expect(parsed!.result ?? '').not.toContain('matched no elements');
   });
 
   it('selectorResolved=false + snapshotSelector → no success message in Result', async () => {

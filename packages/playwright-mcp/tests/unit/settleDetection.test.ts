@@ -574,7 +574,9 @@ describe('selectorResolved warning in Response Result section', () => {
     response.setIncludeSnapshot('full');
     const callToolResult = await response.serialize();
     const parsed = parseResponse(callToolResult);
-    expect(parsed?.result).not.toContain('matched no elements');
+    // Successful scoped snapshots are silent: no result annotation is emitted.
+    // result is undefined (no text section) or, if present, must not contain the fallback warning.
+    expect(parsed?.result ?? '').not.toContain('matched no elements');
   });
 });
 
