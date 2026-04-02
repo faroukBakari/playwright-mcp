@@ -158,12 +158,89 @@ function createStubContext(configOverrides: Record<string, any> = {}) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Tab.screenshotTimeoutOptions — must bypass action ceiling (G1 regression)
+// ---------------------------------------------------------------------------
+
+describe('Tab.screenshotTimeoutOptions — bypasses action ceiling', () => {
+  it('returns undefined when no budget is set (Infinity), regardless of action ceiling', () => {
+    // No deadline → remainingBudget() = Infinity → _minTimeout(undefined) = undefined
+    const ctx = createStubContext({ timeouts: { playwright: { action: 5000 } } });
+    const tab = createStubTab(ctx);
+
+    expect(tab.screenshotTimeoutOptions.timeout).toBeUndefined();
+  });
+
+  it('returns full remaining budget, not capped by action ceiling', () => {
+    // action ceiling = 5000, budget = 15000
+    // screenshotTimeoutOptions: _minTimeout(undefined) → remaining (~15000)
+    // actionTimeoutOptions:     _minTimeout(5000)      → Math.min(5000, ~15000) = 5000
+    const ctx = createStubContext({ timeouts: { playwright: { action: 5000 } } });
+    const tab = createStubTab(ctx);
+
+    ctx.setDeadline(15000);
+
+    const screenshotTimeout = tab.screenshotTimeoutOptions.timeout!;
+    const actionTimeout = tab.actionTimeoutOptions.timeout!;
+
+    // Screenshot gets the full remaining budget — not the 5s action ceiling
+    expect(screenshotTimeout).toBeGreaterThan(0);
+    expect(screenshotTimeout).toBeLessThanOrEqual(15000);
+
+    // Action is capped at the 5s ceiling — budget has headroom so ceiling wins
+    expect(actionTimeout).toBe(5000);
+
+    // The key invariant: screenshot gets more time than the action ceiling allows
+    expect(screenshotTimeout).toBeGreaterThan(actionTimeout);
+  });
+
+  it('returns remaining budget when budget is tighter than any hypothetical ceiling', () => {
+    // Even with a tight budget, screenshotTimeoutOptions returns remaining (not undefined)
+    const ctx = createStubContext({ timeouts: { playwright: { action: 5000 } } });
+    const tab = createStubTab(ctx);
+
+    ctx.setDeadline(1000);
+    const timeout = tab.screenshotTimeoutOptions.timeout!;
+    expect(timeout).toBeGreaterThan(0);
+    expect(timeout).toBeLessThanOrEqual(1000);
+  });
+
+  it('getter evaluates dynamically — no deadline then deadline then cleared', () => {
+    const ctx = createStubContext({ timeouts: { playwright: { action: 5000 } } });
+    const tab = createStubTab(ctx);
+
+    // No deadline → undefined
+    expect(tab.screenshotTimeoutOptions.timeout).toBeUndefined();
+
+    // Set deadline → returns remaining budget
+    ctx.setDeadline(15000);
+    expect(tab.screenshotTimeoutOptions.timeout).toBeGreaterThan(0);
+    expect(tab.screenshotTimeoutOptions.timeout).toBeLessThanOrEqual(15000);
+
+    // Clear deadline → back to undefined
+    ctx.clearDeadline();
+    expect(tab.screenshotTimeoutOptions.timeout).toBeUndefined();
+  });
+
+  it('returns 0 when budget is exhausted', () => {
+    const ctx = createStubContext({ timeouts: { playwright: { action: 5000 } } });
+    const tab = createStubTab(ctx);
+
+    ctx.setDeadline(0); // immediate exhaustion
+    expect(tab.screenshotTimeoutOptions.timeout).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Helpers — minimal stubs that exercise the real Context/Tab deadline logic
+// ---------------------------------------------------------------------------
+
 /**
  * Create a Tab that uses real getter logic but doesn't need a real Page.
  * We access the getters via prototype to avoid the full constructor which
  * requires a real Page with event emitters.
  */
-function createStubTab(context: Context): Pick<Tab, 'actionTimeoutOptions' | 'navigationTimeoutOptions' | 'expectTimeoutOptions'> {
+function createStubTab(context: Context): Pick<Tab, 'actionTimeoutOptions' | 'navigationTimeoutOptions' | 'expectTimeoutOptions' | 'screenshotTimeoutOptions'> {
   // Build a minimal object with the same prototype chain as Tab,
   // setting just the fields the getters need.
   const tab = Object.create(Tab.prototype);
