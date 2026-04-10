@@ -4,7 +4,7 @@ import path from 'path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 // Import from compiled playwright-core (file: dependency)
-import { PerfLog, nullPerfLog, createPerfLog } from 'playwright-core/lib/tools/perfLog';
+import { PerfLog, nullPerfLog, createPerfLog } from 'playwright-core/src/tools/perfLog';
 
 let tmpDir: string;
 

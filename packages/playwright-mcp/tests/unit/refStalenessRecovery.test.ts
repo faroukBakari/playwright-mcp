@@ -166,7 +166,7 @@ describe('refLocator retry on stale ref', () => {
   it('succeeds on first try without re-snapshot', async () => {
     // This verifies the happy path — no retry needed
     const mockPage = createMockPage();
-    const { Tab } = await import('playwright-core/lib/tools/tab');
+    const { Tab } = await import('playwright-core/src/tools/tab');
 
     // We can't easily construct a full Tab, so we test the regex + contract
     // The integration is verified by the vitest suite

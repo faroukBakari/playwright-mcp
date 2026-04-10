@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-import { SharedBackendProxy } from 'playwright-core/lib/tools/browserServerBackend';
+import { SharedBackendProxy } from 'playwright-core/src/tools/browserServerBackend';
 
 // Minimal BrowserServerBackend stub
 function createStubBackend() {

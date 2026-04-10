@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Import from compiled playwright-core (file: dependency)
-import { configFromEnv, mergeConfig, defaultConfig } from 'playwright-core/lib/mcp/config';
-import { Response } from 'playwright-core/lib/tools/response';
+import { configFromEnv, mergeConfig, defaultConfig } from 'playwright-core/src/mcp/config';
+import { Response } from 'playwright-core/src/tools/response';
 
 // Minimal context stub — Response constructor only stores the reference.
 // Methods on context are called later in _build(), but our tests that call

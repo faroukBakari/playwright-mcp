@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
-import { Response } from 'playwright-core/lib/tools/response';
-import { snapshotOptionsSchema } from 'playwright-core/lib/tools/snapshot';
+import { Response } from 'playwright-core/src/tools/response';
+import { snapshotOptionsSchema } from 'playwright-core/src/tools/snapshot';
 
 // Minimal context stub — same pattern as snapshotControl.test.ts
 function createStubContext(id: string = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee') {

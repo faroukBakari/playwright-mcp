@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
 
 // Import from compiled playwright-core (file: dependency)
-import { BrowserServerBackend } from 'playwright-core/lib/tools/browserServerBackend';
-import { toMcpTool } from 'playwright-core/lib/mcp/sdk/tool';
-import navigateModule from 'playwright-core/lib/tools/navigate';
-import formModule from 'playwright-core/lib/tools/form';
-import keyboardModule from 'playwright-core/lib/tools/keyboard';
+import { BrowserServerBackend } from 'playwright-core/src/tools/browserServerBackend';
+import { toMcpTool } from 'playwright-core/src/mcp/sdk/tool';
+import navigateModule from 'playwright-core/src/tools/navigate';
+import formModule from 'playwright-core/src/tools/form';
+import keyboardModule from 'playwright-core/src/tools/keyboard';
 
 const navigateTools: any[] = (navigateModule as any).default ?? navigateModule;
 const formTools: any[] = (formModule as any).default ?? formModule;

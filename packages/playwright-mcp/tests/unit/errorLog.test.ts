@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-import { ErrorLog, createErrorLog } from 'playwright-core/lib/tools/errorLog';
+import { ErrorLog, createErrorLog } from 'playwright-core/src/tools/errorLog';
 
 let tmpDir: string;
 

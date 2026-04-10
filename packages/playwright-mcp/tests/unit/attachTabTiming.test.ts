@@ -37,8 +37,8 @@ import http from 'http';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import WebSocket from 'ws';
 
-import { CDPRelayServer } from 'playwright-core/lib/mcp/cdpRelay';
-import type { CDPRelayOptions } from 'playwright-core/lib/mcp/cdpRelay';
+import { CDPRelayServer } from 'playwright-core/src/mcp/cdpRelay';
+import type { CDPRelayOptions } from 'playwright-core/src/mcp/cdpRelay';
 
 // ---------------------------------------------------------------------------
 // Minimal test harness (mirrors RelayTestHarness in cdpRelay.test.ts)

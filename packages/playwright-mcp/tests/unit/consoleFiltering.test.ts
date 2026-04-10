@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-import { configFromEnv, mergeConfig, defaultConfig } from 'playwright-core/lib/mcp/config';
+import { configFromEnv, mergeConfig, defaultConfig } from 'playwright-core/src/mcp/config';
 
 // Save and restore all PLAYWRIGHT_MCP_ env vars to avoid test pollution
 let savedEnv: Record<string, string | undefined>;

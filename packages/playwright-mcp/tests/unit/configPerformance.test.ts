@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 // Import from compiled playwright-core (file: dependency)
-import { defaultConfig, mergeConfig, configFromEnv } from 'playwright-core/lib/mcp/config';
+import { defaultConfig, mergeConfig, configFromEnv } from 'playwright-core/src/mcp/config';
 
 const PERF_ENV_KEYS = [
   'PLAYWRIGHT_MCP_PERF_POST_ACTION_DELAY',

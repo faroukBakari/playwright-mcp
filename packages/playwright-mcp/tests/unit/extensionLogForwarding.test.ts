@@ -2,8 +2,8 @@ import http from 'http';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import WebSocket from 'ws';
 
-import { CDPRelayServer } from 'playwright-core/lib/mcp/cdpRelay';
-import type { CDPRelayOptions } from 'playwright-core/lib/mcp/cdpRelay';
+import { CDPRelayServer } from 'playwright-core/src/mcp/cdpRelay';
+import type { CDPRelayOptions } from 'playwright-core/src/mcp/cdpRelay';
 
 // Extension-side logger (source code, not compiled — vitest resolves via alias)
 import { extLog, extWarn, extError, setSink, clearSink, _resetForTest, _getBuffer } from '../../../../packages/extension/src/extensionLog';
@@ -142,7 +142,7 @@ describe('CDPRelay — log:entry routing', () => {
 
   it('routes log:entry messages to serverLog', async () => {
     // Spy on the serverLog function used by CDPRelay
-    const { serverLog } = await import('playwright-core/lib/mcp/log');
+    const { serverLog } = await import('playwright-core/src/mcp/log');
     const spy = vi.spyOn({ serverLog }, 'serverLog');
 
     // We can't easily spy on the module-level serverLog import in cdpRelay.

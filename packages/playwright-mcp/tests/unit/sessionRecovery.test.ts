@@ -4,10 +4,10 @@ import path from 'path';
 import http from 'http';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-import { installHttpTransport, sessionStateFile } from 'playwright-core/lib/mcp/sdk/http';
-import { createHttpServer } from 'playwright-core/lib/server/utils/network';
+import { installHttpTransport, sessionStateFile } from 'playwright-core/src/mcp/sdk/http';
+import { createHttpServer } from 'playwright-core/src/server/utils/network';
 
-import type { ServerBackendFactory } from 'playwright-core/lib/mcp/sdk/server';
+import type { ServerBackendFactory } from 'playwright-core/src/mcp/sdk/server';
 
 /** Minimal backend factory — no browser, just enough for MCP server creation. */
 function createTestFactory(): ServerBackendFactory {

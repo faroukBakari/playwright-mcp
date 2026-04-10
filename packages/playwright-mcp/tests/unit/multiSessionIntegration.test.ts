@@ -5,12 +5,12 @@ import http from 'http';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import WebSocket from 'ws';
 
-import { installHttpTransport } from 'playwright-core/lib/mcp/sdk/http';
-import { createHttpServer } from 'playwright-core/lib/server/utils/network';
-import { CDPRelayServer } from 'playwright-core/lib/mcp/cdpRelay';
+import { installHttpTransport } from 'playwright-core/src/mcp/sdk/http';
+import { createHttpServer } from 'playwright-core/src/server/utils/network';
+import { CDPRelayServer } from 'playwright-core/src/mcp/cdpRelay';
 
-import type { ServerBackendFactory } from 'playwright-core/lib/mcp/sdk/server';
-import type { CDPRelayOptions } from 'playwright-core/lib/mcp/cdpRelay';
+import type { ServerBackendFactory } from 'playwright-core/src/mcp/sdk/server';
+import type { CDPRelayOptions } from 'playwright-core/src/mcp/cdpRelay';
 
 // ---------------------------------------------------------------------------
 // MCP HTTP helpers

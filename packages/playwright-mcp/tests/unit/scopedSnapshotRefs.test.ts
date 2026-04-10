@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { Response } from 'playwright-core/lib/tools/response';
+import { Response } from 'playwright-core/src/tools/response';
 
 // ---------------------------------------------------------------------------
 // P0: Scoped snapshot capture preserves the ref resolution map

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Import from compiled playwright-core (file: dependency)
-import { setupExitWatchdog } from 'playwright-core/lib/mcp/watchdog';
+import { setupExitWatchdog } from 'playwright-core/src/mcp/watchdog';
 
 // ---------------------------------------------------------------------------
 // Unhandled rejection resilience — watchdog + orphaned promise handling

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-import { configFromEnv, mergeConfig, defaultConfig } from 'playwright-core/lib/mcp/config';
-import { Response } from 'playwright-core/lib/tools/response';
+import { configFromEnv, mergeConfig, defaultConfig } from 'playwright-core/src/mcp/config';
+import { Response } from 'playwright-core/src/tools/response';
 
 // Minimal context stub — same pattern as snapshotControl.test.ts
 function createStubContext(configOverrides: Record<string, any> = {}) {

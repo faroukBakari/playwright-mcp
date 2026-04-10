@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { Response, parseResponse } from 'playwright-core/lib/tools/response';
+import { Response, parseResponse } from 'playwright-core/src/tools/response';
 
 // ---------------------------------------------------------------------------
 // Cross-iframe CSS selector resolution tests

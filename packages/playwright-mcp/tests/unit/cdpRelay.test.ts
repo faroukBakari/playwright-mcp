@@ -3,8 +3,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import WebSocket from 'ws';
 
 // Import from compiled playwright-core (file: dependency, vitest alias)
-import { CDPRelayServer } from 'playwright-core/lib/mcp/cdpRelay';
-import type { CDPRelayOptions, RelayState } from 'playwright-core/lib/mcp/cdpRelay';
+import { CDPRelayServer } from 'playwright-core/src/mcp/cdpRelay';
+import type { CDPRelayOptions, RelayState } from 'playwright-core/src/mcp/cdpRelay';
 
 /**
  * Test harness that creates a real HTTP server on port 0 and a CDPRelayServer

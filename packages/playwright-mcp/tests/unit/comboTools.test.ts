@@ -2,10 +2,10 @@ import { describe, it, expect, vi } from 'vitest';
 
 // Import tool arrays from compiled playwright-core
 // Default exports compile to .default in CJS
-import formModule from 'playwright-core/lib/tools/form';
-import navigateModule from 'playwright-core/lib/tools/navigate';
-import { resolveTimeout } from 'playwright-core/lib/tools/wait';
-import { Response } from 'playwright-core/lib/tools/response';
+import formModule from 'playwright-core/src/tools/form';
+import navigateModule from 'playwright-core/src/tools/navigate';
+import { resolveTimeout } from 'playwright-core/src/tools/wait';
+import { Response } from 'playwright-core/src/tools/response';
 
 const formTools: any[] = (formModule as any).default ?? formModule;
 const navigateTools: any[] = (navigateModule as any).default ?? navigateModule;

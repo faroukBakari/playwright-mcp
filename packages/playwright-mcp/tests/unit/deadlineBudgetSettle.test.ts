@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { Context } from 'playwright-core/lib/tools/context';
+import { Context } from 'playwright-core/src/tools/context';
 
 // ---------------------------------------------------------------------------
 // Budget-aware settle capping (Phase 2)

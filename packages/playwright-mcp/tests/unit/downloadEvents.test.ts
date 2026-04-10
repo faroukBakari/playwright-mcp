@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import path from 'path';
 
-import { ArtifactCollector } from 'playwright-core/lib/tools/artifactCollector';
-import type { Download } from 'playwright-core/lib/tools/artifactCollector';
+import { ArtifactCollector } from 'playwright-core/src/tools/artifactCollector';
+import type { Download } from 'playwright-core/src/tools/artifactCollector';
 
 // ---------------------------------------------------------------------------
 // Helpers

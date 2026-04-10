@@ -17,11 +17,11 @@ import http from 'http';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'events';
 
-import { installHttpTransport } from 'playwright-core/lib/mcp/sdk/http';
-import { createHttpServer, startHttpServer } from 'playwright-core/lib/server/utils/network';
-import { CDPRelayServer } from 'playwright-core/lib/mcp/cdpRelay';
+import { installHttpTransport } from 'playwright-core/src/mcp/sdk/http';
+import { createHttpServer, startHttpServer } from 'playwright-core/src/server/utils/network';
+import { CDPRelayServer } from 'playwright-core/src/mcp/cdpRelay';
 
-import type { ServerBackend, ServerBackendFactory } from 'playwright-core/lib/mcp/sdk/server';
+import type { ServerBackend, ServerBackendFactory } from 'playwright-core/src/mcp/sdk/server';
 
 // --- HTTP helpers ---
 

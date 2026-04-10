@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import { configFromEnv, mergeConfig, defaultConfig, enumParser } from 'playwright-core/lib/mcp/config';
+import { configFromEnv, mergeConfig, defaultConfig, enumParser } from 'playwright-core/src/mcp/config';
 
 // Save and restore all PLAYWRIGHT_MCP_ env vars to avoid test pollution
 let savedEnv: Record<string, string | undefined>;
@@ -419,7 +419,7 @@ describe('mergeConfig snapshot waitForTimeout', () => {
 describe('snapshotOptionsSchema includes snapshotWaitFor', () => {
   // Import at test-level to verify the schema shape
   it('snapshotWaitFor is an optional object in snapshotOptionsSchema', async () => {
-    const { snapshotOptionsSchema } = await import('playwright-core/lib/tools/snapshot');
+    const { snapshotOptionsSchema } = await import('playwright-core/src/tools/snapshot');
     const shape = snapshotOptionsSchema.shape;
     expect(shape).toHaveProperty('snapshotWaitFor');
     // Verify it accepts an object with text/textGone/selector
@@ -430,13 +430,13 @@ describe('snapshotOptionsSchema includes snapshotWaitFor', () => {
   });
 
   it('snapshotWaitFor is optional — omitting it parses fine', async () => {
-    const { snapshotOptionsSchema } = await import('playwright-core/lib/tools/snapshot');
+    const { snapshotOptionsSchema } = await import('playwright-core/src/tools/snapshot');
     const parsed = snapshotOptionsSchema.parse({});
     expect(parsed.snapshotWaitFor).toBeUndefined();
   });
 
   it('snapshotWaitFor accepts textGone condition', async () => {
-    const { snapshotOptionsSchema } = await import('playwright-core/lib/tools/snapshot');
+    const { snapshotOptionsSchema } = await import('playwright-core/src/tools/snapshot');
     const parsed = snapshotOptionsSchema.parse({
       snapshotWaitFor: { textGone: 'Loading...' },
     });
@@ -444,7 +444,7 @@ describe('snapshotOptionsSchema includes snapshotWaitFor', () => {
   });
 
   it('snapshotWaitFor accepts selector condition', async () => {
-    const { snapshotOptionsSchema } = await import('playwright-core/lib/tools/snapshot');
+    const { snapshotOptionsSchema } = await import('playwright-core/src/tools/snapshot');
     const parsed = snapshotOptionsSchema.parse({
       snapshotWaitFor: { selector: '.results' },
     });
@@ -463,7 +463,7 @@ describe('snapshotWaitFor within parameter', () => {
   // (where `within` is a declared optional string field).
 
   it('snapshotWaitFor shape declares a within field (requires rebuild)', async () => {
-    const { snapshotOptionsSchema } = await import('playwright-core/lib/tools/snapshot');
+    const { snapshotOptionsSchema } = await import('playwright-core/src/tools/snapshot');
     const waitForShape = snapshotOptionsSchema.shape.snapshotWaitFor;
     // unwrap ZodOptional to reach the ZodObject's shape
     const innerShape = (waitForShape as any)._def?.innerType?.shape ?? (waitForShape as any).shape;
@@ -479,7 +479,7 @@ describe('snapshotWaitFor within parameter', () => {
   });
 
   it('within is optional — snapshotWaitFor without it parses fine', async () => {
-    const { snapshotOptionsSchema } = await import('playwright-core/lib/tools/snapshot');
+    const { snapshotOptionsSchema } = await import('playwright-core/src/tools/snapshot');
     const result = snapshotOptionsSchema.safeParse({
       snapshotWaitFor: { text: 'Done' },
     });
@@ -489,7 +489,7 @@ describe('snapshotWaitFor within parameter', () => {
   });
 
   it('within with invalid type (number) is rejected when field is declared', async () => {
-    const { snapshotOptionsSchema } = await import('playwright-core/lib/tools/snapshot');
+    const { snapshotOptionsSchema } = await import('playwright-core/src/tools/snapshot');
     const waitForShape = snapshotOptionsSchema.shape.snapshotWaitFor;
     const innerShape = (waitForShape as any)._def?.innerType?.shape ?? (waitForShape as any).shape;
     const hasWithin = Object.prototype.hasOwnProperty.call(innerShape ?? {}, 'within');
@@ -506,7 +506,7 @@ describe('snapshotWaitFor within parameter', () => {
   });
 
   it('snapshotWaitFor with text and within parses without error', async () => {
-    const { snapshotOptionsSchema } = await import('playwright-core/lib/tools/snapshot');
+    const { snapshotOptionsSchema } = await import('playwright-core/src/tools/snapshot');
     const result = snapshotOptionsSchema.safeParse({
       snapshotWaitFor: { text: 'Submit', within: '.modal' },
     });
@@ -520,7 +520,7 @@ describe('snapshotWaitFor within parameter', () => {
 // selectorResolved warning in MCP Response (integration)
 // ---------------------------------------------------------------------------
 
-import { Response, parseResponse } from 'playwright-core/lib/tools/response';
+import { Response, parseResponse } from 'playwright-core/src/tools/response';
 
 function createMockTab(selectorResolved: boolean) {
   return {
@@ -596,25 +596,25 @@ const validatorContext = {
 
 describe('PageSnapshotForAIResult selectorResolved field', () => {
   it('validator accepts selectorResolved: true', async () => {
-    const { findValidator } = await import('playwright-core/lib/protocol/validator');
+    const { findValidator } = await import('playwright-core/src/protocol/validator');
     const validate = findValidator('Page', 'snapshotForAI', 'Result');
     expect(() => validate({ full: '<snapshot>', selectorResolved: true }, '', validatorContext)).not.toThrow();
   });
 
   it('validator accepts selectorResolved: false', async () => {
-    const { findValidator } = await import('playwright-core/lib/protocol/validator');
+    const { findValidator } = await import('playwright-core/src/protocol/validator');
     const validate = findValidator('Page', 'snapshotForAI', 'Result');
     expect(() => validate({ full: '<snapshot>', selectorResolved: false }, '', validatorContext)).not.toThrow();
   });
 
   it('validator accepts result without selectorResolved (field is optional)', async () => {
-    const { findValidator } = await import('playwright-core/lib/protocol/validator');
+    const { findValidator } = await import('playwright-core/src/protocol/validator');
     const validate = findValidator('Page', 'snapshotForAI', 'Result');
     expect(() => validate({ full: '<snapshot>' }, '', validatorContext)).not.toThrow();
   });
 
   it('validator rejects selectorResolved with non-boolean value (requires rebuild)', async () => {
-    const { findValidator, ValidationError } = await import('playwright-core/lib/protocol/validator');
+    const { findValidator, ValidationError } = await import('playwright-core/src/protocol/validator');
     const validate = findValidator('Page', 'snapshotForAI', 'Result');
     // Detect whether selectorResolved is declared in the compiled schema by
     // checking if a valid boolean is accepted (it always should be post-rebuild).

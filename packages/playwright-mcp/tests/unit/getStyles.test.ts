@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { browserTools } from 'playwright-core/lib/tools/tools';
+import { browserTools } from 'playwright-core/src/tools/tools';
 
 // ---------------------------------------------------------------------------
 // P1: browser_get_styles tool registration and schema

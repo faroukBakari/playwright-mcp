@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Import from compiled playwright-core (file: dependency)
-import { Context } from 'playwright-core/lib/tools/context';
-import { Tab } from 'playwright-core/lib/tools/tab';
+import { Context } from 'playwright-core/src/tools/context';
+import { Tab } from 'playwright-core/src/tools/tab';
 
 // ---------------------------------------------------------------------------
 // Context deadline state
