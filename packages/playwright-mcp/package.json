@@ -15,15 +15,7 @@
   },
   "license": "Apache-2.0",
   "scripts": {
-    "lint": "node update-readme.js",
-    "test": "playwright test",
-    "ctest": "playwright test --project=chrome",
-    "ftest": "playwright test --project=firefox",
-    "wtest": "playwright test --project=webkit",
-    "dtest": "MCP_IN_DOCKER=1 playwright test --project=chromium-docker",
-    "build": "echo OK",
-    "test:unit": "vitest run",
-    "npm-publish": "npm run lint && npm run test && npm publish"
+    "test:unit": "vitest run"
   },
   "devDependencies": {
     "@types/ws": "^8.18.1",
@@ -32,16 +24,9 @@
     "ws": "^8.19.0"
   },
   "exports": {
-    "./package.json": "./package.json",
-    ".": {
-      "types": "./index.d.ts",
-      "default": "./index.js"
-    }
+    "./package.json": "./package.json"
   },
   "dependencies": {
     "playwright-core": "file:../../../playwright/packages/playwright-core"
-  },
-  "bin": {
-    "playwright-mcp": "cli.js"
   }
 }
