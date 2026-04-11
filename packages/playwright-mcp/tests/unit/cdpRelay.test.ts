@@ -75,13 +75,19 @@ class RelayTestHarness {
   /** Disconnect a WebSocket and wait for the close event to propagate. */
   async disconnect(ws: WebSocket): Promise<void> {
     if (ws.readyState === WebSocket.OPEN) {
+      const clientCountBefore = this.relay.clientCount;
       await new Promise<void>(resolve => {
         ws.on('close', () => resolve());
         ws.close();
       });
+      // Wait for relay to process the close (state transition or client removal)
+      const deadline = Date.now() + 500;
+      while (Date.now() < deadline) {
+        if (this.relay.clientCount < clientCountBefore || this.relay.state !== 'connected')
+          break;
+        await sleep(5);
+      }
     }
-    // Small delay for relay to process the close event
-    await sleep(10);
   }
 }
 
@@ -140,7 +146,7 @@ describe('CDPRelayServer — Wave 1', () => {
 
   beforeEach(async () => {
     harness = new RelayTestHarness();
-    await harness.setup({ graceTTL: 50, graceBufferMaxBytes: 1024 });
+    await harness.setup({ graceTTL: 500, graceBufferMaxBytes: 1024 });
   });
 
   afterEach(async () => {
@@ -183,8 +189,8 @@ describe('CDPRelayServer — Wave 1', () => {
     await harness.disconnect(pw);
     expect(harness.relay.state).toBe('grace');
 
-    // Wait for grace to expire (TTL=50ms, wait 80ms)
-    await sleep(80);
+    // Wait for grace to expire (TTL=500ms, wait 600ms)
+    await sleep(600);
 
     expect(harness.relay.state).toBe('disconnected');
     expect(extMessages.some(m => m.type === 'registry:serverDown')).toBe(true);

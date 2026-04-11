@@ -143,12 +143,19 @@ class RelayTestHarness {
 
   async disconnect(ws: WebSocket): Promise<void> {
     if (ws.readyState === WebSocket.OPEN) {
+      const clientCountBefore = this.relay.clientCount;
       await new Promise<void>(resolve => {
         ws.on('close', () => resolve());
         ws.close();
       });
+      // Wait for relay to process the close (state transition or client removal)
+      const deadline = Date.now() + 500;
+      while (Date.now() < deadline) {
+        if (this.relay.clientCount < clientCountBefore || this.relay.state !== 'connected')
+          break;
+        await sleep(5);
+      }
     }
-    await sleep(10);
   }
 }
 
@@ -400,7 +407,7 @@ describe('Multi-Session Integration — Wave 4', () => {
 
   it('extension reload with multiple active sessions — all enter grace and resume', async () => {
     const harness = new RelayTestHarness();
-    await harness.setup({ graceTTL: 500, graceBufferMaxBytes: 1024, extensionGraceTTL: 200 });
+    await harness.setup({ graceTTL: 500, graceBufferMaxBytes: 1024, extensionGraceTTL: 500 });
 
     try {
       const ext = await harness.connectExtension();
