@@ -120,7 +120,7 @@ describe('browser_fill_form snapshot behavior', () => {
       tabs: () => [],
     };
     const response = new Response(context as any, 'browser_fill_form', {});
-    return { context, tab, response };
+    return { context, tab, locator, response };
   }
 
   it('calls setIncludeSnapshot after filling fields', async () => {
@@ -138,6 +138,24 @@ describe('browser_fill_form snapshot behavior', () => {
       submitRef: 'e10',
     }, response);
     expect((response as any)._includeSnapshot).toBe('diff');
+  });
+
+  it('radio field uses click(), not setChecked()', async () => {
+    const { context, locator, response } = createStubs();
+    await fillForm!.handle(context, {
+      fields: [{ name: "Bachelor's Degree", type: 'radio', ref: 'e2102', value: 'Yes' }],
+    }, response);
+    expect(locator.click).toHaveBeenCalledOnce();
+    expect(locator.setChecked).not.toHaveBeenCalled();
+  });
+
+  it('checkbox field uses setChecked(), not click()', async () => {
+    const { context, locator, response } = createStubs();
+    await fillForm!.handle(context, {
+      fields: [{ name: 'Agree to terms', type: 'checkbox', ref: 'e42', value: 'true' }],
+    }, response);
+    expect(locator.setChecked).toHaveBeenCalledWith(true, expect.any(Object));
+    expect(locator.click).not.toHaveBeenCalled();
   });
 });
 
