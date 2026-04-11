@@ -2158,6 +2158,116 @@ describe('CDPRelayServer -- Per-Session Grace', () => {
   });
 });
 
+describe('CDPRelayServer -- Immediate Cleanup (skip grace on idle disposal)', () => {
+  let harness: RelayTestHarness;
+
+  beforeEach(async () => {
+    harness = new RelayTestHarness();
+    await harness.setup({ graceTTL: 500, graceBufferMaxBytes: 1024, sessionGraceTTL: 200 });
+  });
+
+  afterEach(async () => {
+    await harness.teardown();
+  });
+
+  function wireExtension(ext: WebSocket, extMessages: any[], tabId: number = 42): void {
+    ext.on('message', (data: WebSocket.RawData) => {
+      const msg = JSON.parse(data.toString());
+      extMessages.push(msg);
+      if (msg.method === 'createTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { tabId, targetInfo: { type: 'page', url: 'https://example.com' } },
+        }));
+      }
+      if (msg.method === 'attachToTab') {
+        ext.send(JSON.stringify({
+          id: msg.id,
+          result: { targetInfo: { type: 'page', url: 'https://example.com' }, tabId },
+        }));
+      }
+      if (msg.method === 'detachTab') {
+        ext.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+    });
+  }
+
+  it('markForImmediateCleanup skips per-session grace on WS close', async () => {
+    const ext = await harness.connectExtension();
+    const extMessages: any[] = [];
+    wireExtension(ext, extMessages);
+
+    const pw = await harness.connectPlaywrightWithSessionId('idle-sess');
+    pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+    await harness.relay.createTab('idle-sess', 'https://example.com');
+    await sleep(30);
+
+    // Mark for immediate cleanup (simulating SESSION_IDLE_TTL firing)
+    harness.relay.markForImmediateCleanup('idle-sess');
+
+    // Disconnect — WS close should skip grace
+    await harness.disconnect(pw);
+    await sleep(30);
+
+    // detachTab should fire immediately (not after 200ms grace)
+    const detachMsgs = extMessages.filter(m => m.method === 'detachTab');
+    expect(detachMsgs.length).toBe(1);
+
+    // Session should NOT be in dormant (MCP session is permanently gone)
+    const sessions = harness.relay.activeSessions();
+    const dormant = sessions.filter(s => s.status === 'dormant');
+    expect(dormant.length).toBe(0);
+  });
+
+  it('markForImmediateCleanup cancels already-active grace', async () => {
+    const ext = await harness.connectExtension();
+    const extMessages: any[] = [];
+    wireExtension(ext, extMessages);
+
+    const pw = await harness.connectPlaywrightWithSessionId('grace-then-idle');
+    pw.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+    await sleep(50);
+    await harness.relay.createTab('grace-then-idle', 'https://example.com');
+    await sleep(30);
+
+    // Disconnect — enters per-session grace (200ms)
+    await harness.disconnect(pw);
+    await sleep(30);
+
+    // No detachTab yet (grace still active)
+    expect(extMessages.filter(m => m.method === 'detachTab').length).toBe(0);
+
+    // Now mark for immediate cleanup (simulating SESSION_IDLE_TTL firing
+    // after the WS already closed)
+    harness.relay.markForImmediateCleanup('grace-then-idle');
+    await sleep(30);
+
+    // detachTab should fire immediately (grace cancelled)
+    const detachMsgs = extMessages.filter(m => m.method === 'detachTab');
+    expect(detachMsgs.length).toBe(1);
+
+    // Wait past grace TTL — no dormant session should appear
+    await sleep(250);
+    const sessions = harness.relay.activeSessions();
+    const dormant = sessions.filter(s => s.status === 'dormant');
+    expect(dormant.length).toBe(0);
+  });
+
+  it('markForImmediateCleanup is a no-op for unknown sessionId', async () => {
+    const ext = await harness.connectExtension();
+    const extMessages: any[] = [];
+    wireExtension(ext, extMessages);
+
+    // Mark a session that doesn't exist — should not throw
+    harness.relay.markForImmediateCleanup('nonexistent');
+
+    // No detachTab sent
+    await sleep(30);
+    expect(extMessages.filter(m => m.method === 'detachTab').length).toBe(0);
+  });
+});
+
 describe('CDPRelayServer -- Dormant Sessions', () => {
   let harness: RelayTestHarness;
 
