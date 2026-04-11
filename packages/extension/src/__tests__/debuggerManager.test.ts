@@ -1,9 +1,9 @@
 /**
  * Unit tests for debuggerManager — auto-reattach on CDP detach.
  *
- * Tests: terminal reasons (target_closed, canceled_by_user, replaced_with_devtools),
- * transient reasons (reattach with backoff), exhaustion after MAX_RETRIES,
- * per-tab reattach promise isolation.
+ * Tests: terminal reasons (target_closed with tab gone), delayed-terminal
+ * (replaced_with_devtools), transient auto-reattach (canceled_by_user, unknown),
+ * exhaustion after MAX_RETRIES, per-tab reattach promise isolation.
  * Chrome APIs are mocked via chrome-mock.ts setup file.
  */
 
@@ -42,17 +42,20 @@ describe('debuggerManager', () => {
       expect(await tabRegistry.getAll()).toEqual([]);
     });
 
-    it('canceled_by_user: fires terminal callback, no reattach', async () => {
-      await tabRegistry.upsertOnAttach(42, 1, {});
+    it('canceled_by_user: reattaches automatically (user accidentally clicked Cancel)', async () => {
+      await tabRegistry.upsertOnAttach(42, 1, { url: 'https://x.com' });
+      seedTab({ id: 42, url: 'https://x.com', title: 'Test', windowId: 1 });
       const handler = getDetachHandler();
 
       handler({ tabId: 42 }, 'canceled_by_user');
-      await vi.waitFor(() => {
-        expect(terminalCallback).toHaveBeenCalledWith(42, 'canceled_by_user');
-      });
 
-      // Debugger should not be called for reattach
-      expect(chrome.debugger.attach).not.toHaveBeenCalled();
+      // Reattach fires asynchronously with backoff
+      await vi.waitFor(() => {
+        expect(chrome.debugger.attach).toHaveBeenCalledWith({ tabId: 42 }, '1.3');
+      }, { timeout: 2000 });
+
+      // Terminal callback should NOT have been called — this is transient
+      expect(terminalCallback).not.toHaveBeenCalled();
     });
 
     it('replaced_with_devtools: attempts delayed reattach before terminal', async () => {
