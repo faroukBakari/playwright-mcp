@@ -26,7 +26,6 @@
   ],
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.25.2",
-    "@playwright/test": "file:../playwright/packages/playwright-test",
     "@types/node": "^24.3.0"
   }
 }

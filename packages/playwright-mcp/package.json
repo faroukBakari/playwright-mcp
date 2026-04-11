@@ -39,7 +39,6 @@
     }
   },
   "dependencies": {
-    "playwright": "file:../../../playwright/packages/playwright",
     "playwright-core": "file:../../../playwright/packages/playwright-core"
   },
   "bin": {
