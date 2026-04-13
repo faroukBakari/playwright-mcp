@@ -3,7 +3,8 @@
  *
  * Tests: terminal reasons (target_closed with tab gone), delayed-terminal
  * (replaced_with_devtools), transient auto-reattach (canceled_by_user, unknown),
- * exhaustion after MAX_RETRIES, per-tab reattach promise isolation.
+ * exhaustion after MAX_RETRIES, per-tab reattach promise isolation,
+ * context recovery signal (debuggerReattached + contextRecoveryComplete protocol).
  * Chrome APIs are mocked via chrome-mock.ts setup file.
  */
 
@@ -24,6 +25,9 @@ describe('debuggerManager', () => {
 
   beforeEach(() => {
     terminalCallback = vi.fn();
+    // Reset module-level state (maps + callbacks) so timer callbacks from
+    // previous tests can't interfere with the current test's state.
+    debuggerManager._resetForTesting();
     debuggerManager.init(terminalCallback as unknown as (tabId: number, reason: string) => void);
   });
 
@@ -117,22 +121,26 @@ describe('debuggerManager', () => {
       expect(all[0]?.debugger.attached).toBe(true);
     });
 
-    it('falls through to terminal when security reattach fails', async () => {
+    it('falls through to terminal when all security reattach retries fail', { timeout: 15000 }, async () => {
       await tabRegistry.upsertOnAttach(42, 1, { url: 'https://x.com' });
       seedTab({ id: 42, url: 'https://x.com', title: 'Test' });
 
-      // Reattach fails (e.g., Kaspersky is still holding the debugger)
+      // Reattach fails on every attempt (Kaspersky holds the debugger)
       (chrome.debugger.attach as any).mockRejectedValue(new Error('Cannot attach'));
 
       const handler = getDetachHandler();
       handler({ tabId: 42 }, 'target_closed');
 
+      // 3 retries with exponential backoff: ~500ms + ~1s + ~2s ≈ 3.5s worst case
       await vi.waitFor(() => {
         expect(terminalCallback).toHaveBeenCalledWith(42, 'target_closed');
-      }, { timeout: 2000 });
+      }, { timeout: 8000 });
+
+      // Should have attempted all 3 retries
+      expect(chrome.debugger.attach).toHaveBeenCalledTimes(3);
     });
 
-    it('exposes reattachPromise(tabId) during security-induced reattach', async () => {
+    it('exposes reattachPromise(tabId) during security-induced reattach', { timeout: 15000 }, async () => {
       await tabRegistry.upsertOnAttach(42, 1, { url: 'https://x.com' });
       seedTab({ id: 42, url: 'https://x.com', title: 'Test', windowId: 1 });
 
@@ -142,12 +150,22 @@ describe('debuggerManager', () => {
       const handler = getDetachHandler();
       handler({ tabId: 42 }, 'target_closed');
 
-      // Promise should be available during the debounce window
+      // Promise should be available during the retry window
       // (allow a tick for the async handleTargetClosed to start)
       await vi.waitFor(() => {
         expect(debuggerManager.reattachPromise(42)).not.toBeNull();
       }, { timeout: 100 });
 
+      // Simulate relay sending contextRecoveryComplete after reattach succeeds
+      // (in production, the server does Runtime.enable + createIsolatedWorld first)
+      await vi.waitFor(() => {
+        expect(chrome.debugger.attach).toHaveBeenCalled();
+      }, { timeout: 2000 });
+      // Small delay to let the reattach callback fire before sending confirmation
+      await new Promise(r => setTimeout(r, 100));
+      debuggerManager.notifyContextRecoveryComplete(42);
+
+      // Promise resolves to true after context recovery confirmation
       const result = await debuggerManager.reattachPromise(42)!;
       expect(result).toBe(true);
 
@@ -157,7 +175,7 @@ describe('debuggerManager', () => {
   });
 
   describe('per-tab reattach isolation', () => {
-    it('reattachPromise for tab A is independent of tab B', async () => {
+    it('reattachPromise for tab A is independent of tab B', { timeout: 15000 }, async () => {
       await tabRegistry.upsertOnAttach(42, 1, { url: 'https://a.com' });
       await tabRegistry.upsertOnAttach(77, 1, { url: 'https://b.com' });
       seedTab({ id: 42, url: 'https://a.com', title: 'Tab A', windowId: 1 });
@@ -175,12 +193,19 @@ describe('debuggerManager', () => {
       // Tab 77 should have no reattach promise
       expect(debuggerManager.reattachPromise(77)).toBeNull();
 
+      // Simulate relay confirmation for tab 42
+      await vi.waitFor(() => {
+        expect(chrome.debugger.attach).toHaveBeenCalled();
+      }, { timeout: 2000 });
+      await new Promise(r => setTimeout(r, 100));
+      debuggerManager.notifyContextRecoveryComplete(42);
+
       // Wait for tab 42 to complete
       const result = await debuggerManager.reattachPromise(42)!;
       expect(result).toBe(true);
     });
 
-    it('security-detach for tab A does not block tab B operations', async () => {
+    it('security-detach for tab A does not block tab B operations', { timeout: 10000 }, async () => {
       await tabRegistry.upsertOnAttach(42, 1, { url: 'https://a.com' });
       await tabRegistry.upsertOnAttach(77, 1, { url: 'https://b.com' });
       seedTab({ id: 42, url: 'https://a.com', title: 'Tab A', windowId: 1 });
@@ -270,6 +295,184 @@ describe('debuggerManager', () => {
         expect(all[0]?.debugger.attached).toBe(true);
         expect(all[0]?.url).toBe('https://new.com');
       }, { timeout: 2000 });
+    });
+  });
+
+  describe('context recovery signal (debuggerReattached + contextRecoveryComplete)', () => {
+    it('emits debuggerReattached after successful security-induced reattach', { timeout: 10000 }, async () => {
+      const reattachedCallback = vi.fn();
+      debuggerManager.init(terminalCallback as any, reattachedCallback);
+
+      await tabRegistry.upsertOnAttach(42, 1, { url: 'https://x.com' });
+      seedTab({ id: 42, url: 'https://x.com', title: 'Test', windowId: 1 });
+
+      const handler = getDetachHandler();
+      handler({ tabId: 42 }, 'target_closed');
+
+      // Wait for reattach to succeed
+      await vi.waitFor(() => {
+        expect(chrome.debugger.attach).toHaveBeenCalledWith({ tabId: 42 }, '1.3');
+      }, { timeout: 2000 });
+
+      // reattachedCallback should fire after successful reattach
+      await vi.waitFor(() => {
+        expect(reattachedCallback).toHaveBeenCalledWith(42);
+      }, { timeout: 2000 });
+    });
+
+    it('does NOT emit debuggerReattached on initial attach or transient (non-security) reattach', { timeout: 10000 }, async () => {
+      const reattachedCallback = vi.fn();
+      debuggerManager.init(terminalCallback as any, reattachedCallback);
+
+      await tabRegistry.upsertOnAttach(42, 1, { url: 'https://x.com' });
+      seedTab({ id: 42, url: 'https://x.com', title: 'Test', windowId: 1 });
+
+      const handler = getDetachHandler();
+      // canceled_by_user uses attemptReattach path, not handleTargetClosed
+      handler({ tabId: 42 }, 'canceled_by_user');
+
+      await vi.waitFor(() => {
+        expect(chrome.debugger.attach).toHaveBeenCalledWith({ tabId: 42 }, '1.3');
+      }, { timeout: 2000 });
+
+      // reattachedCallback must NOT fire for transient paths
+      expect(reattachedCallback).not.toHaveBeenCalled();
+    });
+
+    it('reattachPromise stays pending until contextRecoveryComplete arrives', { timeout: 10000 }, async () => {
+      const reattachedCallback = vi.fn();
+      debuggerManager.init(terminalCallback as any, reattachedCallback);
+
+      await tabRegistry.upsertOnAttach(42, 1, { url: 'https://x.com' });
+      seedTab({ id: 42, url: 'https://x.com', title: 'Test', windowId: 1 });
+
+      const handler = getDetachHandler();
+      handler({ tabId: 42 }, 'target_closed');
+
+      // Wait until reattach succeeded and promise is in pending-for-recovery state
+      await vi.waitFor(() => {
+        expect(reattachedCallback).toHaveBeenCalledWith(42);
+      }, { timeout: 2000 });
+
+      // Promise must still be pending (waiting for contextRecoveryComplete)
+      const promise = debuggerManager.reattachPromise(42);
+      expect(promise).not.toBeNull();
+
+      let resolved = false;
+      promise!.then(() => { resolved = true; });
+
+      // Give one tick — promise should NOT have resolved yet
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      // Now send contextRecoveryComplete — promise should resolve
+      debuggerManager.notifyContextRecoveryComplete(42);
+
+      const result = await promise!;
+      expect(result).toBe(true);
+
+      // Promise cleared after resolution
+      expect(debuggerManager.reattachPromise(42)).toBeNull();
+    });
+
+    it('reattachPromise resolves via timeout if contextRecoveryComplete never arrives', { timeout: 30000 }, async () => {
+      vi.useFakeTimers();
+      try {
+        const reattachedCallback = vi.fn();
+        // Re-init with reattachedCallback (beforeEach called init without it)
+        debuggerManager._resetForTesting();
+        debuggerManager.init(terminalCallback as any, reattachedCallback);
+
+        await tabRegistry.upsertOnAttach(42, 1, { url: 'https://x.com' });
+        seedTab({ id: 42, url: 'https://x.com', title: 'Test', windowId: 1 });
+
+        const handler = getDetachHandler();
+        handler({ tabId: 42 }, 'target_closed');
+
+        // Advance past the first reattach backoff delay (~500ms) and async tab check
+        // This gets us to the point where handleTargetClosed has the reattachPromise
+        // set but is waiting for the backoff delay before attaching.
+        await vi.advanceTimersByTimeAsync(600);
+
+        // Reattach should have been attempted by now
+        await vi.waitFor(() => {
+          expect(chrome.debugger.attach).toHaveBeenCalledWith({ tabId: 42 }, '1.3');
+        }, { timeout: 500 });
+
+        // After reattach, promise should be alive (waiting for context recovery)
+        await vi.waitFor(() => {
+          expect(reattachedCallback).toHaveBeenCalledWith(42);
+        }, { timeout: 500 });
+
+        const promise = debuggerManager.reattachPromise(42);
+        expect(promise).not.toBeNull();
+
+        // Advance past CONTEXT_RECOVERY_TIMEOUT_MS (10s) — promise resolves anyway
+        await vi.advanceTimersByTimeAsync(11_000);
+
+        const result = await promise!;
+        expect(result).toBe(true);
+        expect(debuggerManager.reattachPromise(42)).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('contextRecoveryComplete for wrong tab does not unblock correct tab', { timeout: 10000 }, async () => {
+      const reattachedCallback = vi.fn();
+      debuggerManager.init(terminalCallback as any, reattachedCallback);
+
+      await tabRegistry.upsertOnAttach(42, 1, { url: 'https://x.com' });
+      seedTab({ id: 42, url: 'https://x.com', title: 'Test', windowId: 1 });
+
+      const handler = getDetachHandler();
+      handler({ tabId: 42 }, 'target_closed');
+
+      await vi.waitFor(() => {
+        expect(reattachedCallback).toHaveBeenCalledWith(42);
+      }, { timeout: 2000 });
+
+      const promise = debuggerManager.reattachPromise(42);
+      expect(promise).not.toBeNull();
+
+      // Send completion for a different tab — must not affect tab 42
+      debuggerManager.notifyContextRecoveryComplete(99);
+
+      let resolved = false;
+      promise!.then(() => { resolved = true; });
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+      expect(debuggerManager.reattachPromise(42)).not.toBeNull();
+
+      // Cleanup: send correct completion to avoid leaking promises
+      debuggerManager.notifyContextRecoveryComplete(42);
+      await promise!;
+    });
+
+    it('reattachPromise resolves false (no context signal) when security reattach exhausted', { timeout: 20000 }, async () => {
+      const reattachedCallback = vi.fn();
+      debuggerManager.init(terminalCallback as any, reattachedCallback);
+
+      await tabRegistry.upsertOnAttach(42, 1, { url: 'https://x.com' });
+      seedTab({ id: 42, url: 'https://x.com', title: 'Test', windowId: 1 });
+
+      // All reattach attempts fail
+      (chrome.debugger.attach as any).mockRejectedValue(new Error('Cannot attach'));
+
+      const handler = getDetachHandler();
+      handler({ tabId: 42 }, 'target_closed');
+
+      // Promise is set during security-induced path
+      await vi.waitFor(() => {
+        expect(debuggerManager.reattachPromise(42)).not.toBeNull();
+      }, { timeout: 100 });
+
+      const result = await debuggerManager.reattachPromise(42)!;
+      expect(result).toBe(false);
+
+      // reattachedCallback must NOT fire when reattach failed
+      expect(reattachedCallback).not.toHaveBeenCalled();
+      expect(terminalCallback).toHaveBeenCalledWith(42, 'target_closed');
     });
   });
 });

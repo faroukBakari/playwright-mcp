@@ -16,7 +16,7 @@
 
 import { extLog, extLogS, extErrorS, setSink, clearSink } from './extensionLog';
 import type { LogEntry } from './extensionLog';
-import { reattachPromise } from './debuggerManager';
+import { reattachPromise, notifyContextRecoveryComplete } from './debuggerManager';
 import { TabManager } from './tabManager';
 import * as tabRegistry from './tabRegistry';
 
@@ -92,6 +92,21 @@ export class RelayConnection {
     this._sendMessage({ method: 'tabClosed', params: { sessionId, tabId } });
   }
 
+  /**
+   * Notify relay that a security-induced detach/reattach cycle completed for
+   * the given tab. The relay will initiate server-side context recovery and
+   * respond with contextRecoveryComplete when ready.
+   */
+  sendDebuggerReattached(tabId: number): void {
+    const sessionId = this.tabManager.getSessionForTab(tabId);
+    if (!sessionId) {
+      extLog('relay', `debuggerReattached: no session found for tab ${tabId}, dropping`);
+      return;
+    }
+    extLog('relay', `debuggerReattached emitted for tab ${tabId} sessionId=${sessionId}`);
+    this._sendMessage({ method: 'debuggerReattached', params: { tabId, sessionId } });
+  }
+
   private _onClose() {
     if (this._closed)
       return;
@@ -148,6 +163,17 @@ export class RelayConnection {
     }
 
     extLog('relay', 'Received message:', parsed);
+
+    // Context recovery confirmation from relay — unblocks reattachPromise so
+    // CDP commands retry after server-side execution contexts are restored.
+    if (parsed.method === 'contextRecoveryComplete') {
+      const tabId: number | undefined = parsed.params?.tabId;
+      if (tabId != null) {
+        extLog('relay', `contextRecoveryComplete received for tab ${tabId}`);
+        notifyContextRecoveryComplete(tabId);
+      }
+      return;
+    }
 
     // Route registry messages (type-based) separately from CDP protocol (id-based)
     if (typeof parsed.type === 'string' && parsed.type.startsWith('registry:')) {

@@ -48,14 +48,21 @@ class TabShareExtension {
     chrome.action.onClicked.addListener(this._onActionClicked.bind(this));
     // Debugger manager owns chrome.debugger.onDetach — handles registry
     // updates, auto-reattach for transient detaches, and terminal callbacks.
-    debuggerManager.init((tabId, reason) => {
-      extLog('lifecycle', `Terminal debugger detach for tab ${tabId}: ${reason}`);
-      if (!this._connectedTabs.has(tabId))
-        return;
-      this._removeConnectedTab(tabId);
-      this._activeConnection?.tabManager.removeByTab(tabId);
-      // Relay owns WebSocket lifecycle — do not close connection based on tab count.
-    });
+    debuggerManager.init(
+      (tabId, reason) => {
+        extLog('lifecycle', `Terminal debugger detach for tab ${tabId}: ${reason}`);
+        if (!this._connectedTabs.has(tabId))
+          return;
+        this._removeConnectedTab(tabId);
+        this._activeConnection?.tabManager.removeByTab(tabId);
+        // Relay owns WebSocket lifecycle — do not close connection based on tab count.
+      },
+      (tabId) => {
+        // Emit debuggerReattached signal to relay so it can initiate server-side
+        // context recovery. The relay will respond with contextRecoveryComplete.
+        this._activeConnection?.sendDebuggerReattached(tabId);
+      }
+    );
     // Reconcile registry on service worker restart
     tabRegistry.reconcile().catch(e => extLog('lifecycle', 'tabRegistry reconcile error:', e));
   }
