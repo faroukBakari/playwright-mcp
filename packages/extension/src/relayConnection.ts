@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { extLog, extLogS, extErrorS, setSink, clearSink } from './extensionLog';
+import { extLog, extLogS, setSink, clearSink } from './extensionLog';
 import type { LogEntry } from './extensionLog';
 import { reattachPromise, notifyContextRecoveryComplete } from './debuggerManager';
 import { TabManager } from './tabManager';
@@ -38,9 +38,6 @@ export class RelayConnection {
   private _tabManager = new TabManager();
   private _ws: WebSocket;
   private _eventListener: (source: chrome.debugger.DebuggerSession, method: string, params: any) => void;
-  private _tabPromise: Promise<void>;
-  private _tabPromiseResolve!: () => void;
-  private _pendingTabId: number | null = null;
   private _closed = false;
   private _keepaliveInterval: ReturnType<typeof setInterval>;
 
@@ -50,13 +47,15 @@ export class RelayConnection {
   ontabdetach?: (tabId: number) => void;
 
   constructor(ws: WebSocket) {
-    this._tabPromise = new Promise(resolve => this._tabPromiseResolve = resolve);
     this._ws = ws;
     this._ws.onmessage = this._onMessage.bind(this);
     this._ws.onclose = () => this._onClose();
     // Store listener for cleanup. Debugger detach handling is owned by
     // debuggerManager (not RelayConnection) to support auto-reattach.
-    this._eventListener = this._onDebuggerEvent.bind(this);
+    // Wrap async handler so the synchronous listener signature is satisfied.
+    this._eventListener = (...args: Parameters<typeof this._onDebuggerEvent>) => {
+      this._onDebuggerEvent(...args).catch(e => extLog('relay', 'Error in debugger event handler:', e));
+    };
     chrome.debugger.onEvent.addListener(this._eventListener);
     // Wire extension log forwarding over this WS
     setSink((entry: LogEntry) => this._sendLog(entry));
@@ -72,12 +71,6 @@ export class RelayConnection {
   /** Expose TabManager for background.ts tab closure handling. */
   get tabManager(): TabManager {
     return this._tabManager;
-  }
-
-  // Either setTabId or close is called after creating the connection.
-  setTabId(tabId: number): void {
-    this._pendingTabId = tabId;
-    this._tabPromiseResolve();
   }
 
   close(message: string): void {
@@ -98,13 +91,14 @@ export class RelayConnection {
    * respond with contextRecoveryComplete when ready.
    */
   sendDebuggerReattached(tabId: number): void {
-    const sessionId = this.tabManager.getSessionForTab(tabId);
-    if (!sessionId) {
-      extLog('relay', `debuggerReattached: no session found for tab ${tabId}, dropping`);
-      return;
-    }
-    extLog('relay', `debuggerReattached emitted for tab ${tabId} sessionId=${sessionId}`);
-    this._sendMessage({ method: 'debuggerReattached', params: { tabId, sessionId } });
+    this._tabManager.getSessionForTab(tabId).then(sessionId => {
+      if (!sessionId) {
+        extLog('relay', `debuggerReattached: no session found for tab ${tabId}, dropping`);
+        return;
+      }
+      extLog('relay', `debuggerReattached emitted for tab ${tabId} sessionId=${sessionId}`);
+      this._sendMessage({ method: 'debuggerReattached', params: { tabId, sessionId } });
+    }).catch(e => extLog('relay', `debuggerReattached lookup failed for tab ${tabId}:`, e));
   }
 
   private _onClose() {
@@ -128,10 +122,10 @@ export class RelayConnection {
     'Log.entryAdded',
   ]);
 
-  private _onDebuggerEvent(source: chrome.debugger.DebuggerSession, method: string, params: any): void {
+  private async _onDebuggerEvent(source: chrome.debugger.DebuggerSession, method: string, params: any): Promise<void> {
     if (source.tabId == null)
       return;
-    const sessionId = this._tabManager.getSessionForTab(source.tabId);
+    const sessionId = await this._tabManager.getSessionForTab(source.tabId);
     if (!sessionId)
       return;
     if (!RelayConnection._quietCDPEvents.has(method))
@@ -208,12 +202,6 @@ export class RelayConnection {
       const sessionId: string | undefined = message.params?.sessionId;
       const requestedTabId: number | undefined = message.params?.tabId;
 
-      // If explicit tabId provided (reconnection), update pending and resolve
-      if (requestedTabId != null && this._pendingTabId !== requestedTabId) {
-        this._pendingTabId = requestedTabId;
-        this._tabPromiseResolve();
-      }
-
       let tabId: number;
       if (requestedTabId != null) {
         // Verify tab still exists — it may have been closed while session was dormant
@@ -225,12 +213,8 @@ export class RelayConnection {
           const newTab = await chrome.tabs.create({ active: true, url: 'about:blank' });
           tabId = newTab.id!;
         }
-      } else if (this._tabManager.size === 0) {
-        // First client — wait for popup tab selection
-        await this._tabPromise;
-        tabId = this._pendingTabId!;
       } else {
-        // Subsequent client with no explicit tabId — create a new tab.
+        // No explicit tabId — create a new tab.
         // Use about:blank to avoid chrome://newtab which blocks CDP access.
         const newTab = await chrome.tabs.create({ active: true, url: 'about:blank' });
         extLogS('relay', sessionId, `chrome.tabs.create → tabId=${newTab.id}`);
@@ -238,32 +222,12 @@ export class RelayConnection {
       }
 
       const effectiveSessionId = sessionId ?? `_anon-${tabId}`;
-      const { debuggee, bumpedSessionId, bumpedDebuggee } = this._tabManager.attach(effectiveSessionId, tabId);
-
-      // If a previous session was bumped, detach its chrome.debugger attachment
-      // directly using the captured debuggee — detach(sessionId) can't find it
-      // because attach() already deleted it from _sessions.
-      if (bumpedSessionId && bumpedDebuggee) {
-        await chrome.debugger.detach(bumpedDebuggee)
-          .then(() => extLogS('relay', effectiveSessionId, `chrome.debugger.detach success for bumped session ${bumpedSessionId}`))
-          .catch(() => extLogS('relay', effectiveSessionId, `chrome.debugger.detach skipped for bumped session ${bumpedSessionId} (tab already closed)`));
-        this.ontabdetach?.(tabId);
-      }
-
-      extLogS('relay', effectiveSessionId, 'Attaching debugger to tab:', debuggee);
-      try {
-        await chrome.debugger.attach(debuggee, '1.3');
-        extLogS('relay', effectiveSessionId, `chrome.debugger.attach success tabId=${tabId}`);
-      } catch (e: any) {
-        extErrorS('relay', effectiveSessionId, `chrome.debugger.attach failed tabId=${tabId}: ${e.message}`);
-        throw e;
-      }
+      const { debuggee } = await this._tabManager.attach(effectiveSessionId, tabId);
       this.ontabattach?.(tabId, effectiveSessionId);
       const result: any = await chrome.debugger.sendCommand(debuggee, 'Target.getTargetInfo');
       return {
         targetInfo: result?.targetInfo,
         tabId,
-        bumpedSessionId,
       };
     }
 
@@ -297,9 +261,7 @@ export class RelayConnection {
           }
           claimedTabIds.add(tabId);
 
-          const { debuggee } = this._tabManager.attach(sessionId, tabId);
-          await chrome.debugger.attach(debuggee, '1.3');
-          extLogS('relay', sessionId, `chrome.debugger.attach success tabId=${tabId} (recovery)`);
+          const { debuggee } = await this._tabManager.attach(sessionId, tabId);
           this.ontabattach?.(tabId, sessionId);
           const result: any = await chrome.debugger.sendCommand(debuggee, 'Target.getTargetInfo');
           results.push({ sessionId, tabId, targetInfo: result?.targetInfo, success: true });
@@ -314,7 +276,10 @@ export class RelayConnection {
     if (message.method === 'detachTab') {
       const sessionId: string | undefined = message.params?.sessionId;
       if (sessionId) {
-        const tabId = await this._tabManager.detach(sessionId);
+        // Look up tabId before releasing so we can fire ontabdetach
+        const debuggee = await this._tabManager.getDebuggee(sessionId);
+        const tabId = debuggee?.tabId;
+        await this._tabManager.detach(sessionId);
         if (tabId != null)
           this.ontabdetach?.(tabId);
       }
@@ -323,7 +288,7 @@ export class RelayConnection {
 
     if (message.method === 'listTabs') {
       const allTabs = await chrome.tabs.query({});
-      const sessions = this._tabManager.getAllSessions();
+      const sessions = await this._tabManager.getAllSessions();
       const sessionByTab = new Map(sessions.map(s => [s.tabId, s.sessionId]));
       const automatedTabIds = new Set(sessions.map(s => s.tabId));
 
@@ -349,20 +314,7 @@ export class RelayConnection {
       extLogS('relay', sessionId, `chrome.tabs.create → tabId=${tabId} url=${url}`);
 
       if (sessionId) {
-        const { debuggee, bumpedSessionId, bumpedDebuggee } = this._tabManager.attach(sessionId, tabId);
-        if (bumpedSessionId && bumpedDebuggee) {
-          await chrome.debugger.detach(bumpedDebuggee)
-            .then(() => extLogS('relay', sessionId, `chrome.debugger.detach success for bumped session ${bumpedSessionId}`))
-            .catch(() => extLogS('relay', sessionId, `chrome.debugger.detach skipped for bumped session ${bumpedSessionId} (tab already closed)`));
-          this.ontabdetach?.(tabId);
-        }
-        try {
-          await chrome.debugger.attach(debuggee, '1.3');
-          extLogS('relay', sessionId, `chrome.debugger.attach success tabId=${tabId} (createTab)`);
-        } catch (e: any) {
-          extErrorS('relay', sessionId, `chrome.debugger.attach failed tabId=${tabId} (createTab): ${e.message}`);
-          throw e;
-        }
+        const { debuggee } = await this._tabManager.attach(sessionId, tabId);
         this.ontabattach?.(tabId, sessionId);
 
         // Get full targetInfo (targetId, browserContextId, etc.) — Playwright
@@ -577,9 +529,10 @@ export class RelayConnection {
     // END TEMPORARY TEST COMMANDS
 
     // For forwardCDPCommand, resolve debuggee via tabManager
-    const debuggee = this._tabManager.getDebuggee(message.params?.sessionId);
-    if (!debuggee?.tabId)
-      throw new Error('No tab is connected. Please go to the Playwright MCP extension and select the tab you want to connect to.');
+    const debuggee = await this._tabManager.getDebuggee(message.params?.sessionId);
+    if (!debuggee?.tabId) {
+      throw new Error('No tab attached. Please attach / reattach to a tab');
+    }
 
     if (message.method === 'forwardCDPCommand') {
       const { cdpSessionId, method, params } = message.params;

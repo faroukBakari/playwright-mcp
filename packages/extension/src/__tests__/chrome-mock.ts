@@ -95,6 +95,20 @@ const debuggerApi = {
   sendCommand: vi.fn(async (_target: chrome.debugger.Debuggee, _method: string, _params?: any) => {
     return { targetInfo: { type: 'page', targetId: 'mock-target' } };
   }),
+  // Returns DebuggerInfo for all currently attached tabs.
+  // Default implementation derives from attachedDebuggees so _syncTabs()
+  // is transparent in tests that don't explicitly override getTargets.
+  getTargets: vi.fn(async (): Promise<chrome.debugger.TargetInfo[]> => {
+    return [...attachedDebuggees].map(tabId => ({
+      attached: true,
+      tabId,
+      id: `target-${tabId}`,
+      type: 'page' as chrome.debugger.TargetInfoType,
+      title: '',
+      url: '',
+      faviconUrl: '',
+    }));
+  }),
   onEvent: { addListener: vi.fn(), removeListener: vi.fn() },
   onDetach: { addListener: vi.fn(), removeListener: vi.fn() },
 };
@@ -169,6 +183,17 @@ beforeEach(() => {
   });
   debuggerApi.detach.mockImplementation(async (target: chrome.debugger.Debuggee) => {
     if (target.tabId != null) attachedDebuggees.delete(target.tabId);
+  });
+  debuggerApi.getTargets.mockImplementation(async (): Promise<chrome.debugger.TargetInfo[]> => {
+    return [...attachedDebuggees].map(tabId => ({
+      attached: true,
+      tabId,
+      id: `target-${tabId}`,
+      type: 'page' as chrome.debugger.TargetInfoType,
+      title: '',
+      url: '',
+      faviconUrl: '',
+    }));
   });
 });
 

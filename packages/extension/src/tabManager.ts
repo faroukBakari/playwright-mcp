@@ -1,143 +1,188 @@
 /**
  * Multi-tab debugger state manager.
  *
- * Owns the mapping between relay-provided sessionIds and chrome.debugger
- * attachments (one per tab). No WS awareness, no protocol knowledge —
- * pure state management.
+ * Sole owner of all chrome.debugger.attach/detach calls (exception:
+ * debuggerManager.ts owns reattach-on-security-detach, same tabId only).
+ *
+ * Every public method syncs internal state against Chrome ground truth
+ * via getTargets() before operating — making the map self-healing across
+ * SW restarts, missed onDetach events, and closed tabs.
+ *
+ * Single map: tabId → sessionId. Reverse lookup (sessionId → tabId)
+ * is an O(n) scan — negligible at 1–10 concurrent sessions.
  *
  * Single-client compatibility: getDebuggee(undefined) with exactly one
  * entry returns that entry — no invented sessionIds, no dual code paths.
  */
 
-import { extLog, extLogS, extError, extErrorS } from './extensionLog';
+import { extLog, extLogS, extErrorS } from './extensionLog';
 
 export class TabManager {
-  /** sessionId → debuggee */
-  private _sessions = new Map<string, chrome.debugger.Debuggee>();
-  /** tabId → sessionId (reverse lookup for event routing) */
+  /** tabId → sessionId. Single source of truth. */
   private _tabToSession = new Map<number, string>();
 
-  /**
-   * Register a session's debugger attachment to a tab.
-   * If another session already owns this tab, bumps it first.
-   * Returns the debuggee object for use with chrome.debugger APIs.
-   */
-  attach(sessionId: string, tabId: number): { debuggee: chrome.debugger.Debuggee; bumpedSessionId?: string; bumpedDebuggee?: chrome.debugger.Debuggee } {
-    // If this sessionId was previously attached to a different tab, clean up
-    const existing = this._sessions.get(sessionId);
-    if (existing?.tabId != null)
-      this._tabToSession.delete(existing.tabId);
+  /** Reverse scan: sessionId → tabId. O(n), n ≤ 10. */
+  private _tabForSession(sessionId: string): number | undefined {
+    for (const [tabId, sid] of this._tabToSession) {
+      if (sid === sessionId) return tabId;
+    }
+    return undefined;
+  }
 
-    // Bump: if another session owns this tab, evict it.
-    // Capture the debuggee BEFORE deleting so the caller can call
-    // chrome.debugger.detach(bumpedDebuggee) directly — detach(sessionId)
-    // would find nothing after the delete.
-    let bumpedSessionId: string | undefined;
-    let bumpedDebuggee: chrome.debugger.Debuggee | undefined;
-    const previousOwner = this._tabToSession.get(tabId);
-    if (previousOwner != null && previousOwner !== sessionId) {
-      bumpedSessionId = previousOwner;
-      bumpedDebuggee = this._sessions.get(previousOwner);
-      this._sessions.delete(previousOwner);
-      extLogS('tabManager', sessionId, `bumped session ${previousOwner} from tab ${tabId}`);
+  /**
+   * Sync internal map against Chrome ground truth.
+   * Purges entries where Chrome says the debugger is no longer attached.
+   * Logs if the operation takes >10ms.
+   */
+  private async _syncTabs(): Promise<void> {
+    const start = performance.now();
+    const targets = await chrome.debugger.getTargets();
+    const attachedTabIds = new Set(
+      targets.filter(t => t.attached && t.tabId != null).map(t => t.tabId!)
+    );
+    const staleTabs = [...this._tabToSession.keys()].filter(id => !attachedTabIds.has(id));
+    for (const tabId of staleTabs) {
+      const sessionId = this._tabToSession.get(tabId)!;
+      this._tabToSession.delete(tabId);
+      extLog('tabManager', `_syncTabs: purged stale session=${sessionId} tab=${tabId}`);
+    }
+    const ms = performance.now() - start;
+    if (ms > 10)
+      extLog('tabManager', `_syncTabs: ${ms.toFixed(1)}ms (${this._tabToSession.size} sessions)`);
+  }
+
+  /**
+   * Attach a session to a tab. Handles bump (previous owner detached) and
+   * session move (same session, different tab) internally.
+   *
+   * Self-ownership: if sessionId already owns tabId, no-op.
+   * Bump: if a different session owns tabId, it is detached first.
+   * Attach failure: propagates error; map state is already consistent.
+   */
+  async attach(sessionId: string, tabId: number): Promise<{ debuggee: chrome.debugger.Debuggee }> {
+    await this._syncTabs();
+
+    // Self-ownership: already own this tab with this session — no-op
+    const currentOwner = this._tabToSession.get(tabId);
+    if (currentOwner === sessionId) {
+      extLogS('tabManager', sessionId, `attach: no-op, already own tab ${tabId}`);
+      return { debuggee: { tabId } };
     }
 
+    // Clean old tab mapping if session was previously attached to a different tab
+    const oldTab = this._tabForSession(sessionId);
+    if (oldTab != null) {
+      try {
+        await chrome.debugger.detach({ tabId: oldTab });
+        this._tabToSession.delete(oldTab);
+      }
+      catch (e: any) { extLog('tabManager', `session move: detach old tab ${oldTab} failed: ${e.message}`); }
+    }
+
+    // Bump: different session owns this tab → detach it internally
+    if (currentOwner != null) {
+      await chrome.debugger.detach({ tabId });
+      this._tabToSession.delete(tabId);
+      extLogS('tabManager', sessionId, `attach: bumped session ${currentOwner} from tab ${tabId}`);
+    }
+
+    // Attach
     const debuggee: chrome.debugger.Debuggee = { tabId };
-    this._sessions.set(sessionId, debuggee);
+    extLogS('tabManager', sessionId, `attach: chrome.debugger.attach tabId=${tabId}`);
+    await chrome.debugger.attach(debuggee, '1.3');
     this._tabToSession.set(tabId, sessionId);
-    extLog('tabManager', `attach: sessionId=${sessionId} tabId=${tabId} (${this._sessions.size} sessions)`);
-    return { debuggee, bumpedSessionId, bumpedDebuggee };
+    extLog('tabManager', `attach: sessionId=${sessionId} tabId=${tabId} (${this._tabToSession.size} sessions)`);
+    return { debuggee };
   }
 
   /**
-   * Detach a session by sessionId. Calls chrome.debugger.detach.
-   * Returns the tabId that was detached, or null if not found.
+   * Detach a session from Chrome and remove from map.
+   * No-op if session not found.
    */
-  async detach(sessionId: string): Promise<number | null> {
-    const debuggee = this._sessions.get(sessionId);
-    if (!debuggee || debuggee.tabId == null)
-      return null;
 
-    const tabId = debuggee.tabId;
-    this._sessions.delete(sessionId);
-    this._tabToSession.delete(tabId);
-    extLog('tabManager', `detach: sessionId=${sessionId} tabId=${tabId} (${this._sessions.size} remaining)`);
-
-    try {
-      await chrome.debugger.detach(debuggee);
-      extLogS('tabManager', sessionId, `chrome.debugger.detach success tabId=${tabId}`);
-    } catch (e: any) {
-      extErrorS('tabManager', sessionId, `chrome.debugger.detach failed tabId=${tabId}: ${e.message}`);
+  async _detach(sessionId: string): Promise<void> {
+    const tabId = this._tabForSession(sessionId);
+    if (tabId == null) {
+      extLog('tabManager', `detach: sessionId=${sessionId} not found, skipping`);
+      return;
     }
-    return tabId;
+    this._tabToSession.delete(tabId);
+    extLog('tabManager', `detach: sessionId=${sessionId} tabId=${tabId} (${this._tabToSession.size} remaining)`);
+    await chrome.debugger.detach({ tabId });
+  }
+
+  async detach(sessionId: string): Promise<void> {
+    await this._syncTabs().then(() => this._detach(sessionId));
   }
 
   /**
-   * Detach all sessions. Used on connection close.
+   * Detach all sessions. Used on WS connection close to prevent
+   * a 30s debugger lock window during the next reconnect.
+   * Delegates to detach() per session. Failures are logged, not thrown.
    */
   async detachAll(): Promise<void> {
-    const entries = [...this._sessions.entries()];
-    this._sessions.clear();
-    this._tabToSession.clear();
-    extLog('tabManager', `detachAll: detaching ${entries.length} sessions`);
-    await Promise.all(
-        entries.map(([sessionId, debuggee]) =>
-          chrome.debugger.detach(debuggee)
-            .then(() => extLogS('tabManager', sessionId, `chrome.debugger.detach success tabId=${debuggee.tabId}`))
-            .catch((e: any) => extErrorS('tabManager', sessionId, `chrome.debugger.detach failed tabId=${debuggee.tabId}: ${e.message}`))
-        )
-    );
+    const sessionIds = [...this._tabToSession.values()];
+    extLog('tabManager', `detachAll: detaching ${sessionIds.length} sessions`);
+    await Promise.allSettled(sessionIds.map(sid => this._detach(sid)));
   }
 
   /**
    * Look up the debuggee for a sessionId.
-   * - If sessionId provided → direct lookup.
+   * - If sessionId provided → scan for matching session.
    * - If undefined + exactly 1 entry → return that entry (single-client compat).
    * - Otherwise → undefined.
    */
-  getDebuggee(sessionId?: string): chrome.debugger.Debuggee | undefined {
-    if (sessionId != null)
-      return this._sessions.get(sessionId);
-    if (this._sessions.size === 1)
-      return this._sessions.values().next().value;
+  async getDebuggee(sessionId?: string): Promise<chrome.debugger.Debuggee | undefined> {
+    await this._syncTabs();
+    if (sessionId != null) {
+      const tabId = this._tabForSession(sessionId);
+      return tabId != null ? { tabId } : undefined;
+    }
+    if (this._tabToSession.size === 1) {
+      const tabId = this._tabToSession.keys().next().value!;
+      return { tabId };
+    }
     return undefined;
   }
 
   /**
    * Reverse lookup: tabId → sessionId. Used for event routing.
    */
-  getSessionForTab(tabId: number): string | undefined {
+  async getSessionForTab(tabId: number): Promise<string | undefined> {
+    await this._syncTabs();
     return this._tabToSession.get(tabId);
   }
 
   /**
-   * Remove a session by its tabId (e.g., tab closure).
+   * Remove a session by its tabId (e.g., tab closure event).
+   * State-only removal — Chrome already closed the tab.
    * Returns the sessionId that was removed, or undefined.
    */
-  removeByTab(tabId: number): string | undefined {
+  async removeByTab(tabId: number): Promise<string | undefined> {
+    await this._syncTabs();
     const sessionId = this._tabToSession.get(tabId);
     if (sessionId == null)
       return undefined;
     this._tabToSession.delete(tabId);
-    this._sessions.delete(sessionId);
-    extLog('tabManager', `removeByTab: tabId=${tabId} sessionId=${sessionId} (${this._sessions.size} remaining)`);
+    extLog('tabManager', `removeByTab: tabId=${tabId} sessionId=${sessionId} (${this._tabToSession.size} remaining)`);
     return sessionId;
   }
 
-  /** Tab IDs of all connected sessions. */
-  get connectedTabIds(): number[] {
+  /** All session→tabId mappings. Used by listTabs for enrichment. */
+  async getAllSessions(): Promise<Array<{ sessionId: string; tabId: number }>> {
+    await this._syncTabs();
+    return [...this._tabToSession.entries()].map(([tabId, sessionId]) => ({ sessionId, tabId }));
+  }
+
+  /** Tab IDs of all connected sessions. Test-only helper. */
+  async getConnectedTabIds(): Promise<number[]> {
+    await this._syncTabs();
     return [...this._tabToSession.keys()];
   }
 
-  /** Number of attached sessions. */
-  get size(): number {
-    return this._sessions.size;
-  }
-
-  /** All session→tabId mappings. Used by listTabs for enrichment. */
-  getAllSessions(): Array<{ sessionId: string; tabId: number }> {
-    return [...this._sessions.entries()]
-      .filter(([, d]) => d.tabId != null)
-      .map(([sessionId, d]) => ({ sessionId, tabId: d.tabId! }));
+  /** Number of attached sessions. Syncs before counting. */
+  async getSize(): Promise<number> {
+    await this._syncTabs();
+    return this._tabToSession.size;
   }
 }

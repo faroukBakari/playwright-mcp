@@ -54,7 +54,7 @@ class TabShareExtension {
         if (!this._connectedTabs.has(tabId))
           return;
         this._removeConnectedTab(tabId);
-        this._activeConnection?.tabManager.removeByTab(tabId);
+        void this._activeConnection?.tabManager.removeByTab(tabId);
         // Relay owns WebSocket lifecycle — do not close connection based on tab count.
       },
       (tabId) => {
@@ -88,17 +88,19 @@ class TabShareExtension {
             (error: any) => sendResponse({ success: false, error: error.message }));
         return true; // Return true to indicate that the response will be sent asynchronously
       case 'getConnectionStatus':
-        const sessions: Record<string, number> = {};
-        for (const tabId of this._connectedTabs) {
-          const sid = this._activeConnection?.tabManager.getSessionForTab(tabId);
-          if (sid)
-            sessions[sid] = tabId;
-        }
-        sendResponse({
-          connectedTabIds: [...this._connectedTabs],
-          sessions,
-        });
-        return false;
+        (async () => {
+          const sessions: Record<string, number> = {};
+          for (const tabId of this._connectedTabs) {
+            const sid = await this._activeConnection?.tabManager.getSessionForTab(tabId);
+            if (sid)
+              sessions[sid] = tabId;
+          }
+          sendResponse({
+            connectedTabIds: [...this._connectedTabs],
+            sessions,
+          });
+        })().catch(e => sendResponse({ connectedTabIds: [], sessions: {}, error: String(e) }));
+        return true;
       case 'disconnect':
         this._disconnect().then(
             () => sendResponse({ success: true }),
@@ -157,7 +159,6 @@ class TabShareExtension {
         throw new Error('No active MCP relay connection');
       this._pendingTabSelection.delete(selectorTabId);
 
-      this._activeConnection.setTabId(tabId);
       chrome.tabs.get(tabId).then(
           tab => tabRegistry.upsertOnAttach(tabId, windowId, { url: tab.url, title: tab.title }),
           () => tabRegistry.upsertOnAttach(tabId, windowId, {}),
@@ -230,7 +231,7 @@ class TabShareExtension {
     if (!this._connectedTabs.has(tabId))
       return;
     this._removeConnectedTab(tabId);
-    const removedSessionId = this._activeConnection?.tabManager.removeByTab(tabId);
+    const removedSessionId = await this._activeConnection?.tabManager.removeByTab(tabId);
     // Notify relay about tab closure — relay owns WebSocket lifecycle decisions.
     if (removedSessionId && this._activeConnection)
       this._activeConnection.sendTabClosed(removedSessionId, tabId);

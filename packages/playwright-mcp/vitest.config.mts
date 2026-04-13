@@ -21,5 +21,9 @@ export default defineConfig({
   test: {
     include: ['tests/unit/**/*.test.ts'],
     globals: true,
+    coverage: {
+      include: ['../extension/src/**/*.ts'],
+      exclude: ['../extension/src/__tests__/**'],
+    },
   },
 });

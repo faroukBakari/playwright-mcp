@@ -3,9 +3,9 @@
  *
  * When Chrome drops the CDP debugger, evaluates whether to automatically
  * reattach. Calls chrome.debugger.attach() directly — NOT through
- * RelayConnection (which has a one-shot setTabId). RelayConnection is
- * unaware of reattach cycles; it sees CDP commands flowing normally
- * because the target { tabId } hasn't changed.
+ * RelayConnection. RelayConnection is unaware of reattach cycles;
+ * it sees CDP commands flowing normally because the target { tabId }
+ * hasn't changed.
  *
  * Decision matrix:
  *   target_closed + tab gone   → remove from registry, terminal

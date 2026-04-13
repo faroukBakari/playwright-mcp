@@ -2,7 +2,7 @@
  * Unit tests for RelayConnection — WS message routing and protocol.
  *
  * Tests: registry message routing (type-based), _callbackId echo,
- * CDP command forwarding, setTabId resolution, close cleanup,
+ * CDP command forwarding, close cleanup,
  * multi-tab delegation via TabManager, event clientId tagging.
  * Chrome APIs + WebSocket mocked.
  */
@@ -130,25 +130,12 @@ describe('RelayConnection', () => {
     });
   });
 
-  describe('setTabId', () => {
-    it('resolves the tab promise for CDP commands', async () => {
-      connection.setTabId(42);
-
-      // attachToTab should now be able to proceed (it awaits _tabPromise)
-      ws.receive({ id: 1, method: 'attachToTab', params: {} });
-
-      await vi.waitFor(() => {
-        expect(chrome.debugger.attach).toHaveBeenCalledWith({ tabId: 42 }, '1.3');
-      });
-    });
-  });
-
   describe('CDP command forwarding', () => {
     it('forwards forwardCDPCommand to chrome.debugger.sendCommand', async () => {
-      connection.setTabId(42);
+      seedTab({ id: 42 });
 
-      // First attach
-      ws.receive({ id: 1, method: 'attachToTab' });
+      // First attach with explicit tabId
+      ws.receive({ id: 1, method: 'attachToTab', params: { tabId: 42 } });
       await vi.waitFor(() => expect(chrome.debugger.attach).toHaveBeenCalled());
 
       // Then forward a CDP command
@@ -174,9 +161,9 @@ describe('RelayConnection', () => {
 
   describe('close', () => {
     it('closes WebSocket and detaches all via TabManager', async () => {
-      connection.setTabId(42);
+      seedTab({ id: 42 });
       // Attach so TabManager has an entry to detach
-      ws.receive({ id: 1, method: 'attachToTab', params: {} });
+      ws.receive({ id: 1, method: 'attachToTab', params: { tabId: 42 } });
       await vi.waitFor(() => expect(chrome.debugger.attach).toHaveBeenCalled());
 
       connection.close('test reason');
@@ -215,23 +202,23 @@ describe('RelayConnection', () => {
 
   describe('multi-tab delegation', () => {
     it('attachToTab with sessionId delegates to tabManager', async () => {
-      connection.setTabId(42);
+      seedTab({ id: 42 });
 
-      ws.receive({ id: 1, method: 'attachToTab', params: { sessionId: 'relay-client-1' } });
+      ws.receive({ id: 1, method: 'attachToTab', params: { sessionId: 'relay-client-1', tabId: 42 } });
 
       await vi.waitFor(() => {
         expect(chrome.debugger.attach).toHaveBeenCalledWith({ tabId: 42 }, '1.3');
       });
 
-      expect(connection.tabManager.size).toBe(1);
-      expect(connection.tabManager.getDebuggee('relay-client-1')).toEqual({ tabId: 42 });
+      expect(await connection.tabManager.getSize()).toBe(1);
+      expect(await connection.tabManager.getDebuggee('relay-client-1')).toEqual({ tabId: 42 });
     });
 
     it('forwardCDPCommand routes via tabManager.getDebuggee(sessionId)', async () => {
-      connection.setTabId(42);
+      seedTab({ id: 42 });
 
-      // Attach first client
-      ws.receive({ id: 1, method: 'attachToTab', params: { sessionId: 'client-A' } });
+      // Attach first client with explicit tabId
+      ws.receive({ id: 1, method: 'attachToTab', params: { sessionId: 'client-A', tabId: 42 } });
       await vi.waitFor(() => expect(chrome.debugger.attach).toHaveBeenCalled());
 
       // Forward command with sessionId
@@ -255,12 +242,12 @@ describe('RelayConnection', () => {
     });
 
     it('detachTab removes client from tabManager', async () => {
-      connection.setTabId(42);
+      seedTab({ id: 42 });
 
-      ws.receive({ id: 1, method: 'attachToTab', params: { sessionId: 'client-X' } });
+      ws.receive({ id: 1, method: 'attachToTab', params: { sessionId: 'client-X', tabId: 42 } });
       await vi.waitFor(() => expect(chrome.debugger.attach).toHaveBeenCalled());
 
-      expect(connection.tabManager.size).toBe(1);
+      expect(await connection.tabManager.getSize()).toBe(1);
 
       ws.receive({ id: 2, method: 'detachTab', params: { sessionId: 'client-X' } });
       await vi.waitFor(() => {
@@ -268,14 +255,14 @@ describe('RelayConnection', () => {
         expect(ws.sent.some(m => m.id === 2 && m.result !== undefined)).toBe(true);
       });
 
-      expect(connection.tabManager.size).toBe(0);
+      expect(await connection.tabManager.getSize()).toBe(0);
       expect(chrome.debugger.detach).toHaveBeenCalledWith({ tabId: 42 });
     });
 
     it('events are tagged with sessionId from tabManager lookup', async () => {
-      connection.setTabId(42);
+      seedTab({ id: 42 });
 
-      ws.receive({ id: 1, method: 'attachToTab', params: { sessionId: 'client-A' } });
+      ws.receive({ id: 1, method: 'attachToTab', params: { sessionId: 'client-A', tabId: 42 } });
       await vi.waitFor(() => expect(chrome.debugger.attach).toHaveBeenCalled());
 
       // Simulate a debugger event from tab 42
@@ -295,8 +282,8 @@ describe('RelayConnection', () => {
     });
 
     it('events from unknown tabs are dropped', async () => {
-      connection.setTabId(42);
-      ws.receive({ id: 1, method: 'attachToTab', params: { sessionId: 'client-A' } });
+      seedTab({ id: 42 });
+      ws.receive({ id: 1, method: 'attachToTab', params: { sessionId: 'client-A', tabId: 42 } });
       await vi.waitFor(() => expect(chrome.debugger.attach).toHaveBeenCalled());
 
       const eventListener = (chrome.debugger.onEvent.addListener as any).mock.calls[
@@ -314,33 +301,33 @@ describe('RelayConnection', () => {
 
   describe('ontabattach sessionId', () => {
     it('passes both tabId and sessionId to callback', async () => {
-      connection.setTabId(42);
+      seedTab({ id: 42 });
       const handler = vi.fn();
       connection.ontabattach = handler;
 
-      ws.receive({ id: 1, method: 'attachToTab', params: { sessionId: 'sess-42' } });
+      ws.receive({ id: 1, method: 'attachToTab', params: { sessionId: 'sess-42', tabId: 42 } });
 
       await vi.waitFor(() => {
         expect(handler).toHaveBeenCalledWith(42, 'sess-42');
       });
     });
 
-    it('generates anonymous sessionId when none provided', async () => {
-      connection.setTabId(42);
+    it('generates anonymous sessionId when none provided — creates new tab', async () => {
+      // No tabId provided: chrome.tabs.create is called, returns id 9999 (mock default)
       const handler = vi.fn();
       connection.ontabattach = handler;
 
       ws.receive({ id: 1, method: 'attachToTab', params: {} });
 
       await vi.waitFor(() => {
-        expect(handler).toHaveBeenCalledWith(42, '_anon-42');
+        expect(chrome.tabs.create).toHaveBeenCalled();
+        expect(handler).toHaveBeenCalledWith(9999, '_anon-9999');
       });
     });
   });
 
   describe('recoverSessions', () => {
     it('reattaches to tab found in registry', async () => {
-      connection.setTabId(10); // Initial tab (unrelated, just to resolve the promise)
       const handler = vi.fn();
       connection.ontabattach = handler;
 
@@ -373,7 +360,6 @@ describe('RelayConnection', () => {
     });
 
     it('returns failure for unknown sessionId', async () => {
-      connection.setTabId(10);
 
       ws.receive({
         id: 6,
@@ -396,7 +382,6 @@ describe('RelayConnection', () => {
     });
 
     it('falls back to URL match when original tab is gone', async () => {
-      connection.setTabId(10);
       const handler = vi.fn();
       connection.ontabattach = handler;
 
@@ -429,7 +414,6 @@ describe('RelayConnection', () => {
     });
 
     it('URL fallback excludes already-claimed tabs (duplicate URLs)', async () => {
-      connection.setTabId(10);
       const handler = vi.fn();
       connection.ontabattach = handler;
 
@@ -464,7 +448,6 @@ describe('RelayConnection', () => {
     });
 
     it('returns failure when tab gone and no URL match exists', async () => {
-      connection.setTabId(10);
 
       // Seed registry with tab 42, but no matching tab in chrome mock
       await tabRegistry.upsertOnAttach(42, 1, { url: 'https://gone.com', sessionId: 'sess-C' });
