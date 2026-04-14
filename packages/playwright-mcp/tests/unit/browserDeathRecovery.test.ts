@@ -425,12 +425,18 @@ describe('CDPRelay respawn (no orphaned servers)', () => {
     // Set some state that would exist after a browser session
     // Access private fields for testing via any cast
     const r = relay as any;
-    // Seed a client session with tab info
+    // Seed a client session with tab info (new ClientSession interface — no ws field)
     const fakeSession = {
       sessionId: 'test-client',
-      ws: { readyState: 3 }, // CLOSED
+      send: () => {},
+      sendRaw: () => {},
+      close: () => {},
+      isOpen: () => false,
+      _connectionId: 1,
       cdpSessionId: 'session-test-client',
       targetInfo: { type: 'page' },
+      tabId: null,
+      downloadBehavior: null,
     };
     r._clients.set('test-client', fakeSession);
     r._playwrightReconnectCount = 2;
