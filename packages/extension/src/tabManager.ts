@@ -73,24 +73,29 @@ export class TabManager {
     const oldTab = this._tabForSession(sessionId);
     if (oldTab != null) {
       try {
-        await chrome.debugger.detach({ tabId: oldTab });
         this._tabToSession.delete(oldTab);
+        await chrome.debugger.detach({ tabId: oldTab });
       }
       catch (e: any) { extLog('tabManager', `session move: detach old tab ${oldTab} failed: ${e.message}`); }
     }
 
     // Bump: different session owns this tab → detach it internally
     if (currentOwner != null) {
-      await chrome.debugger.detach({ tabId });
       this._tabToSession.delete(tabId);
+      await chrome.debugger.detach({ tabId });
       extLogS('tabManager', sessionId, `attach: bumped session ${currentOwner} from tab ${tabId}`);
     }
 
     // Attach
     const debuggee: chrome.debugger.Debuggee = { tabId };
     extLogS('tabManager', sessionId, `attach: chrome.debugger.attach tabId=${tabId}`);
-    await chrome.debugger.attach(debuggee, '1.3');
     this._tabToSession.set(tabId, sessionId);
+    try {
+      await chrome.debugger.attach(debuggee, '1.3');
+    } catch (e) {
+      this._tabToSession.delete(tabId);
+      throw e;
+    }
     extLog('tabManager', `attach: sessionId=${sessionId} tabId=${tabId} (${this._tabToSession.size} sessions)`);
     return { debuggee };
   }
@@ -106,9 +111,9 @@ export class TabManager {
       extLog('tabManager', `detach: sessionId=${sessionId} not found, skipping`);
       return;
     }
-    this._tabToSession.delete(tabId);
     extLog('tabManager', `detach: sessionId=${sessionId} tabId=${tabId} (${this._tabToSession.size} remaining)`);
     await chrome.debugger.detach({ tabId });
+    this._tabToSession.delete(tabId);
   }
 
   async detach(sessionId: string): Promise<void> {
