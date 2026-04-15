@@ -15,7 +15,7 @@
  * entry returns that entry — no invented sessionIds, no dual code paths.
  */
 
-import { extLog, extLogS, extErrorS } from './extensionLog';
+import { extLog, extLogS } from './extensionLog';
 
 export class TabManager {
   /** tabId → sessionId. Single source of truth. */

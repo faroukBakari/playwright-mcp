@@ -127,7 +127,7 @@ class TabShareExtension {
         this._pendingTabSelection.delete(selectorTabId);
       };
       this._pendingTabSelection.set(selectorTabId, { connection });
-      extLog('lifecycle', `Connected to MCP relay`);
+      extLog('lifecycle', 'Connected to MCP relay');
     } catch (error: any) {
       const message = `Failed to connect to MCP relay: ${error.message}`;
       extLog('lifecycle', message);
@@ -144,7 +144,7 @@ class TabShareExtension {
       // _connectToRelay and return — tab assignments are managed by the relay
       // via the attachToTab protocol, not the popup flow.
       if (this._activeConnection) {
-        extLog('lifecycle', `Active connection exists — ignoring popup tab selection`);
+        extLog('lifecycle', 'Active connection exists — ignoring popup tab selection');
         const pending = this._pendingTabSelection.get(selectorTabId);
         if (pending) {
           pending.connection.close('Connection already active');
@@ -185,7 +185,7 @@ class TabShareExtension {
         chrome.tabs.update(tabId, { active: true }),
         chrome.windows.update(windowId, { focused: true }),
       ]);
-      extLog('lifecycle', `Connected to MCP bridge`);
+      extLog('lifecycle', 'Connected to MCP bridge');
     } catch (error: any) {
       this._clearAllConnectedTabs();
       extLog('lifecycle', `Failed to connect tab ${tabId}:`, error.message);
@@ -215,7 +215,7 @@ class TabShareExtension {
       await chrome.action.setTitle({ tabId, title: title || '' });
       if (color)
         await chrome.action.setBadgeBackgroundColor({ tabId, color });
-    } catch (error: any) {
+    } catch {
       // Ignore errors as the tab may be closed already.
     }
   }
@@ -260,7 +260,7 @@ class TabShareExtension {
     }
   }
 
-  private _onTabUpdated(tabId: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) {
+  private _onTabUpdated(tabId: number, changeInfo: chrome.tabs.TabChangeInfo, _tab: chrome.tabs.Tab) {
     tabRegistry.onTabUpdated(tabId, changeInfo);
     if (this._connectedTabs.has(tabId))
       void this._addConnectedTab(tabId);

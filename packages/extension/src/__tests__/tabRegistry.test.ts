@@ -5,7 +5,7 @@
  * Chrome APIs are mocked via chrome-mock.ts setup file.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { seedTab } from './chrome-mock';
 import * as tabRegistry from '../tabRegistry';
 

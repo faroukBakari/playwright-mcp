@@ -1,0 +1,42 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-json
+        exclude: tsconfig.*\.json$
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+
+  - repo: local
+    hooks:
+      - id: extension-eslint
+        name: extension eslint
+        entry: bash -c 'eval "$(fnm env)" && fnm use 22 && cd packages/extension && npx eslint src/'
+        language: system
+        pass_filenames: false
+        files: ^packages/extension/src/.*\.tsx?$
+
+      - id: extension-typecheck
+        name: extension typecheck
+        entry: bash -c 'eval "$(fnm env)" && fnm use 22 && cd packages/extension && npx tsc --noEmit'
+        language: system
+        pass_filenames: false
+        files: ^packages/extension/src/.*\.tsx?$
+
+      - id: extension-tests
+        name: extension unit tests
+        entry: bash -c 'eval "$(fnm env)" && fnm use 22 && cd packages/extension && npx vitest run'
+        language: system
+        pass_filenames: false
+        files: ^packages/extension/.*\.tsx?$
+
+      - id: server-tests
+        name: server unit tests
+        entry: bash -c 'eval "$(fnm env)" && fnm use 22 && cd packages/playwright-mcp && npx vitest run'
+        language: system
+        pass_filenames: false
+        files: ^packages/playwright-mcp/.*\.tsx?$

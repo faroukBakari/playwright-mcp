@@ -485,19 +485,19 @@ export class RelayConnection {
     // TEMPORARY TEST COMMANDS — remove after chrome.downloads verification
     if (message.method === 'Test.enableDownloadListeners') {
       chrome.downloads.onCreated.addListener((item) => {
-        extLogS('downloads', message.params?.sessionId, `TEST: onCreated fired`, { id: item.id, url: item.url, filename: item.filename, state: item.state });
+        extLogS('downloads', message.params?.sessionId, 'TEST: onCreated fired', { id: item.id, url: item.url, filename: item.filename, state: item.state });
       });
       chrome.downloads.onChanged.addListener((delta) => {
-        extLogS('downloads', message.params?.sessionId, `TEST: onChanged fired`, delta);
+        extLogS('downloads', message.params?.sessionId, 'TEST: onChanged fired', delta);
       });
-      extLogS('downloads', message.params?.sessionId, `TEST: download listeners registered`);
+      extLogS('downloads', message.params?.sessionId, 'TEST: download listeners registered');
       return { success: true };
     }
 
     if (message.method === 'Test.downloadWithSaveAsFalse') {
       const testUrl = message.params?.url || 'https://httpbin.org/bytes/1024';
       const testFilename = message.params?.filename || 'test-download.bin';
-      extLogS('downloads', message.params?.sessionId, `TEST: chrome.downloads.download starting`, { url: testUrl, filename: testFilename, saveAs: false });
+      extLogS('downloads', message.params?.sessionId, 'TEST: chrome.downloads.download starting', { url: testUrl, filename: testFilename, saveAs: false });
       try {
         const downloadId = await new Promise<number>((resolve, reject) => {
           chrome.downloads.download(
@@ -511,10 +511,10 @@ export class RelayConnection {
             }
           );
         });
-        extLogS('downloads', message.params?.sessionId, `TEST: chrome.downloads.download SUCCESS`, { downloadId });
+        extLogS('downloads', message.params?.sessionId, 'TEST: chrome.downloads.download SUCCESS', { downloadId });
         const listener = (delta: chrome.downloads.DownloadDelta) => {
           if (delta.id === downloadId) {
-            extLogS('downloads', message.params?.sessionId, `TEST: chrome.downloads.onChanged`, delta);
+            extLogS('downloads', message.params?.sessionId, 'TEST: chrome.downloads.onChanged', delta);
             if (delta.state?.current === 'complete' || delta.state?.current === 'interrupted')
               chrome.downloads.onChanged.removeListener(listener);
           }
@@ -522,7 +522,7 @@ export class RelayConnection {
         chrome.downloads.onChanged.addListener(listener);
         return { success: true, downloadId };
       } catch (error: any) {
-        extLogS('downloads', message.params?.sessionId, `TEST: chrome.downloads.download FAILED`, error.message);
+        extLogS('downloads', message.params?.sessionId, 'TEST: chrome.downloads.download FAILED', error.message);
         return { success: false, error: error.message };
       }
     }

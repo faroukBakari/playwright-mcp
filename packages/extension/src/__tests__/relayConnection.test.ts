@@ -58,7 +58,7 @@ describe('RelayConnection', () => {
 
   describe('registry message routing', () => {
     it('routes registry:list to onregistrymessage handler', async () => {
-      const handler = vi.fn(async (msg: any) => ({
+      const handler = vi.fn(async (_msg: any) => ({
         type: 'registry:response',
         tabs: [{ tabId: 1, url: 'https://x.com' }],
       }));

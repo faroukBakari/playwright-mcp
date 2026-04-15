@@ -167,13 +167,14 @@ describe('TabManager', () => {
       expect(chrome.debugger.detach).not.toHaveBeenCalled();
     });
 
-    it('detach failure propagates, maps still cleared', async () => {
+    it('detach failure propagates, maps retained', async () => {
       await tm.attach('client-1', 42);
       chrome.debugger.detach.mockRejectedValueOnce(new Error('No tab with given id'));
 
       await expect(tm.detach('client-1')).rejects.toThrow('No tab with given id');
-      // Maps cleared even when detach throws (delete happens before chrome call)
-      expect(await tm.getDebuggee('client-1')).toBeUndefined();
+      // Maps NOT cleared — chrome.debugger.detach is called before delete,
+      // so a throw leaves the entry intact (tab may still be attached)
+      expect(await tm.getDebuggee('client-1')).toEqual({ tabId: 42 });
     });
   });
 
@@ -366,7 +367,7 @@ describe('TabManager', () => {
 
       if (violations.length > 0) {
         throw new Error(
-          `chrome.debugger.attach/detach found outside tabManager.ts (with exception for debuggerManager.ts):\n` +
+          'chrome.debugger.attach/detach found outside tabManager.ts (with exception for debuggerManager.ts):\n' +
           violations.map(v => `  ${v}`).join('\n')
         );
       }

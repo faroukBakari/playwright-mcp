@@ -57,33 +57,33 @@ function emit(channel: LogChannel, level: LogLevel, consoleFn: (...args: unknown
 }
 
 export function extLog(channel: LogChannel, message: string, ...args: unknown[]): void {
-  // eslint-disable-next-line no-console
+
   emit(channel, 'info', console.log, message, args);
 }
 
 export function extWarn(channel: LogChannel, message: string, ...args: unknown[]): void {
-  // eslint-disable-next-line no-console
+
   emit(channel, 'warn', console.warn, message, args);
 }
 
 export function extError(channel: LogChannel, message: string, ...args: unknown[]): void {
-  // eslint-disable-next-line no-console
+
   emit(channel, 'error', console.error, message, args);
 }
 
 /** Session-scoped variants — attach sessionId to log entries for server-side filtering. */
 export function extLogS(channel: LogChannel, sessionId: string | undefined, message: string, ...args: unknown[]): void {
-  // eslint-disable-next-line no-console
+
   emit(channel, 'info', console.log, message, args, sessionId);
 }
 
 export function extWarnS(channel: LogChannel, sessionId: string | undefined, message: string, ...args: unknown[]): void {
-  // eslint-disable-next-line no-console
+
   emit(channel, 'warn', console.warn, message, args, sessionId);
 }
 
 export function extErrorS(channel: LogChannel, sessionId: string | undefined, message: string, ...args: unknown[]): void {
-  // eslint-disable-next-line no-console
+
   emit(channel, 'error', console.error, message, args, sessionId);
 }
 
