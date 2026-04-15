@@ -24,6 +24,7 @@ export default defineConfig({
     globals: true,
     coverage: {
       provider: 'v8',
+      reporter: ['json-summary', 'text'],
       // allowExternal: V8 coverage excludes files outside project root by default.
       // Our tests exercise cross-repo sources (playwright-core) via aliases.
       allowExternal: true,

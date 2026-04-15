@@ -36,7 +36,14 @@ repos:
 
       - id: server-tests
         name: server unit tests
-        entry: bash -c 'eval "$(fnm env)" && fnm use 22 && cd packages/playwright-mcp && npx vitest run'
+        entry: bash -c 'eval "$(fnm env)" && fnm use 22 && cd packages/playwright-mcp && npx vitest run --coverage'
+        language: system
+        pass_filenames: false
+        files: ^packages/playwright-mcp/.*\.tsx?$
+
+      - id: coverage-ratchet
+        name: coverage ratchet
+        entry: bash -c 'eval "$(fnm env)" && fnm use 22 && bash ../scripts/check-coverage-ratchet.sh'
         language: system
         pass_filenames: false
         files: ^packages/playwright-mcp/.*\.tsx?$
