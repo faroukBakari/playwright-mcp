@@ -83,6 +83,31 @@ describe('mergeConfig performance', () => {
   });
 });
 
+describe('mergeConfig infrastructure timeouts', () => {
+  it('merges bridgeBuffer from override', () => {
+    const result = mergeConfig(defaultConfig, {
+      timeouts: { infrastructure: { bridgeBuffer: 8000 } },
+    });
+    expect(result.timeouts?.infrastructure?.bridgeBuffer).toBe(8000);
+  });
+
+  it('preserves bridgeBuffer when other infra fields overridden', () => {
+    const result = mergeConfig(defaultConfig, {
+      timeouts: { infrastructure: { sessionIdleTTL: 300 } },
+    });
+    expect(result.timeouts?.infrastructure?.bridgeBuffer).toBe(5000);
+  });
+
+  it('uses default when override omits infrastructure', () => {
+    const result = mergeConfig(defaultConfig, {
+      timeouts: { budget: { default: 8000 } },
+    });
+    expect(result.timeouts?.infrastructure).toEqual({
+      bridgeBuffer: 5000,
+    });
+  });
+});
+
 describe('configFromEnv performance', () => {
   it('reads PLAYWRIGHT_MCP_PERF_* env vars', () => {
     process.env.PLAYWRIGHT_MCP_PERF_POST_ACTION_DELAY = '250';

@@ -3,6 +3,7 @@ import { builtinModules } from 'node:module';
 import path from 'path';
 
 const pwCore = path.resolve(__dirname, '../../../playwright/packages/playwright-core');
+const extSrc = path.resolve(__dirname, '../extension/src');
 
 // Map bare Node built-in names to node: prefixed versions
 const nodeBuiltinAliases = builtinModules
@@ -22,8 +23,18 @@ export default defineConfig({
     include: ['tests/unit/**/*.test.ts'],
     globals: true,
     coverage: {
-      include: ['../extension/src/**/*.ts'],
-      exclude: ['../extension/src/__tests__/**'],
+      provider: 'v8',
+      // allowExternal: V8 coverage excludes files outside project root by default.
+      // Our tests exercise cross-repo sources (playwright-core) via aliases.
+      allowExternal: true,
+      include: [
+        '**/extension/src/**/*.ts',
+        '**/playwright-core/src/mcp/**/*.ts',
+        '**/playwright-core/src/tools/**/*.ts',
+      ],
+      exclude: [
+        '**/extension/src/__tests__/**',
+      ],
     },
   },
 });
