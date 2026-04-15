@@ -120,7 +120,71 @@ describe('addFileResult writes file and returns link', () => {
 });
 
 // ---------------------------------------------------------------------------
-// evaluate tool — filename branch
+// End-to-end: evaluate handler → real Response → fs.writeFile
+// ---------------------------------------------------------------------------
+
+describe('evaluate filename end-to-end (real Response)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('writes evaluate result to /tmp/<filename> via fs.writeFile', async () => {
+    const writeSpy = vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+    const ctx = createStubContext();
+
+    const mockTab = {
+      page: { _evaluateFunction: vi.fn().mockResolvedValue('{"scraped":"data"}') },
+      context: ctx,
+      modalStates: () => [],
+    };
+
+    // Real Response object — not mocked
+    const response = new Response(ctx, 'browser_evaluate', {});
+
+    const tool = evaluateTools[0];
+    await tool.handle(
+      { ensureTab: vi.fn(async () => mockTab) } as any,
+      { function: '() => "test"', filename: 'scrape-result.json' },
+      response as any
+    );
+
+    // The file must be written to /tmp/<filename>
+    expect(writeSpy).toHaveBeenCalledWith(
+      '/tmp/scrape-result.json',
+      '{"scraped":"data"}',
+      'utf-8'
+    );
+  });
+
+  it('writes runCode result to /tmp/<filename> via fs.writeFile', async () => {
+    const writeSpy = vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+    const ctx = createStubContext();
+
+    const mockTab = {
+      page: {},
+      modalStates: () => [],
+      waitForCompletion: vi.fn(async (fn: () => Promise<void>) => fn()),
+    };
+
+    const response = new Response(ctx, 'browser_run_code', {});
+
+    const tool = runCodeTools[0];
+    await tool.handle(
+      { ensureTab: vi.fn(async () => mockTab) } as any,
+      { code: 'async (page) => { return "hello world"; }', filename: 'code-output.json' },
+      response as any
+    );
+
+    expect(writeSpy).toHaveBeenCalledWith(
+      '/tmp/code-output.json',
+      expect.any(String),
+      'utf-8'
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// evaluate tool — filename branch (mocked response)
 // ---------------------------------------------------------------------------
 
 // Helper: create a mock context wrapping a mock tab for defineTabTool's ensureTab()
