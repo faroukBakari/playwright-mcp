@@ -13,6 +13,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import { TabManager } from '../tabManager';
+import { attachedDebuggees } from './chrome-mock';
 
 describe('TabManager', () => {
   let tm: TabManager;
@@ -45,6 +46,41 @@ describe('TabManager', () => {
       // Default mock returns attachedDebuggees which includes tab 42
       const size = await tm.getSize();
       expect(size).toBe(1);
+      expect(await tm.getDebuggee('sess-1')).toEqual({ tabId: 42 });
+    });
+
+    it('does not purge an in-flight attach whose chrome.debugger.attach has not yet resolved', async () => {
+      // Reproduce the ghost debugger race:
+      //   1. attach() sets _tabToSession optimistically before awaiting chrome.debugger.attach
+      //   2. While that await is pending, a concurrent _syncTabs call via getSize()
+      //      queries getTargets() — Chrome hasn't confirmed the attach yet → empty
+      //   3. _syncTabs purges the entry → ghost: Chrome attached, map empty
+
+      let resolveAttach!: () => void;
+      chrome.debugger.attach.mockImplementationOnce(async (target: chrome.debugger.Debuggee) => {
+        // Block until we explicitly resolve — simulates slow Chrome IPC
+        await new Promise<void>(r => { resolveAttach = r; });
+        // Only update ground truth after Chrome "confirms"
+        if (target.tabId != null) attachedDebuggees.add(target.tabId);
+      });
+
+      // Start attach — will block inside chrome.debugger.attach
+      const attachPromise = tm.attach('sess-1', 42);
+
+      // Flush microtasks so attach() progresses past _syncTabs and
+      // the synchronous _tabToSession.set(), reaching the pending await
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      // Concurrent _syncTabs: getTargets sees no attached tabs (attach pending)
+      // Current bug: _syncTabs purges sess-1 → map empty → ghost debugger
+      const size = await tm.getSize();
+      expect(size).toBe(1); // should survive — not be purged
+
+      // Let Chrome confirm the attach
+      resolveAttach();
+      await attachPromise;
+
+      // Final state must be consistent
       expect(await tm.getDebuggee('sess-1')).toEqual({ tabId: 42 });
     });
   });

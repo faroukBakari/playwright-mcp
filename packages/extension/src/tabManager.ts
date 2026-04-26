@@ -21,6 +21,9 @@ export class TabManager {
   /** tabId → sessionId. Single source of truth. */
   private _tabToSession = new Map<number, string>();
 
+  /** Tab IDs with a pending chrome.debugger.attach — immune to _syncTabs purge. */
+  private _pendingAttach = new Set<number>();
+
   /** Reverse scan: sessionId → tabId. O(n), n ≤ 10. */
   private _tabForSession(sessionId: string): number | undefined {
     for (const [tabId, sid] of this._tabToSession) {
@@ -40,7 +43,7 @@ export class TabManager {
     const attachedTabIds = new Set(
       targets.filter(t => t.attached && t.tabId != null).map(t => t.tabId!)
     );
-    const staleTabs = [...this._tabToSession.keys()].filter(id => !attachedTabIds.has(id));
+    const staleTabs = [...this._tabToSession.keys()].filter(id => !attachedTabIds.has(id) && !this._pendingAttach.has(id));
     for (const tabId of staleTabs) {
       const sessionId = this._tabToSession.get(tabId)!;
       this._tabToSession.delete(tabId);
@@ -90,11 +93,14 @@ export class TabManager {
     const debuggee: chrome.debugger.Debuggee = { tabId };
     extLogS('tabManager', sessionId, `attach: chrome.debugger.attach tabId=${tabId}`);
     this._tabToSession.set(tabId, sessionId);
+    this._pendingAttach.add(tabId);
     try {
       await chrome.debugger.attach(debuggee, '1.3');
     } catch (e) {
       this._tabToSession.delete(tabId);
       throw e;
+    } finally {
+      this._pendingAttach.delete(tabId);
     }
     extLog('tabManager', `attach: sessionId=${sessionId} tabId=${tabId} (${this._tabToSession.size} sessions)`);
     return { debuggee };
