@@ -120,6 +120,7 @@ function createStubs(tabOverrides: Partial<{
     ensureTab: vi.fn().mockResolvedValue(tab),
     options: { cwd: '/tmp' },
     config: { snapshot: { mode: 'incremental' } },
+    tabs: () => [],
   };
 
   const response = new Response(context as any, 'browser_file_upload', {});

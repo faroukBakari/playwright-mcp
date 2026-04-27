@@ -124,3 +124,36 @@ describe('Response maxResponseChars guard', () => {
     expect(text).not.toContain('[response truncated');
   });
 });
+
+// ---------------------------------------------------------------------------
+// isClose behavior: _hadTabsAtConstruction guard
+// ---------------------------------------------------------------------------
+
+describe('isClose behavior', () => {
+  it('does not set isClose when tabs are always empty (fresh session)', async () => {
+    // Simulates a fresh session that never had tabs — _hadTabsAtConstruction = false
+    const ctx = createStubContext({});
+    // ctx.tabs already returns [] by default from createStubContext
+    const response = new Response(ctx, 'browser_list_tabs', {});
+    response.addTextResult('No tabs');
+    const result = await response.serialize();
+    expect(result.isClose).toBeUndefined();
+  });
+
+  it('sets isClose when tabs decrease from >0 to 0 (browser closed)', async () => {
+    // Simulates a session that HAD tabs at construction, then lost them all
+    let callCount = 0;
+    const mockTab = { headerSnapshot: async () => ({ current: true, url: 'about:blank', title: '', changed: false, console: { errors: 0, warnings: 0 } }) };
+    const ctx = {
+      id: 'test-context-id',
+      config: {},
+      options: { cwd: '/tmp' },
+      currentTab: () => undefined,
+      tabs: () => callCount++ === 0 ? [mockTab] : [],
+    } as any;
+    const response = new Response(ctx, 'browser_navigate', {});
+    response.addTextResult('Navigated');
+    const result = await response.serialize();
+    expect(result.isClose).toBe(true);
+  });
+});
