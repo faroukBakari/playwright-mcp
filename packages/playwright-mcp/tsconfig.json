@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "types": ["vitest/globals"],
+    "paths": {
+      "playwright-core/src/*": ["../../../playwright/packages/playwright-core/src/*"]
+    }
+  },
+  "include": ["cli-dev.ts", "tests"],
+  "exclude": ["node_modules"]
+}

@@ -41,6 +41,13 @@ repos:
         pass_filenames: false
         files: ^packages/playwright-mcp/.*\.tsx?$
 
+      - id: server-typecheck
+        name: server typecheck
+        entry: bash -c 'eval "$(fnm env)" && fnm use 22 && bash scripts/check-typecheck-baseline.sh'
+        language: system
+        pass_filenames: false
+        files: ^packages/playwright-mcp/.*\.tsx?$
+
       - id: coverage-ratchet
         name: coverage ratchet
         entry: bash -c 'eval "$(fnm env)" && fnm use 22 && bash ../scripts/check-coverage-ratchet.sh'
