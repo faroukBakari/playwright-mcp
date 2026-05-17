@@ -34,7 +34,7 @@ describe('Console filtering config parsing', () => {
   // These two tests exercise the configFromEnv() path. The source is wired
   // (config.ts lines 325-326) but the compiled lib/ does not yet include the
   // console filtering block — it goes through cliOptions unlike the bespoke
-  // snapshot.maxChars path that IS compiled. Enable once `./install.sh` builds.
+  // snapshot.maxChars path that IS compiled. Enable once `./build.py` builds.
   it.todo('parses excludePatterns from env var (comma-separated) — needs build');
   it.todo('parses maxEvents from env var — needs build');
 

@@ -458,7 +458,7 @@ describe('snapshotOptionsSchema includes snapshotWaitFor', () => {
 
 describe('snapshotWaitFor within parameter', () => {
   // `within` was added to snapshot.ts source. The compiled lib reflects this
-  // after ./install.sh. Tests below pass against both the pre-rebuild lib
+  // after ./build.py. Tests below pass against both the pre-rebuild lib
   // (where `within` is stripped as an unknown key) and the post-rebuild lib
   // (where `within` is a declared optional string field).
 
@@ -467,7 +467,7 @@ describe('snapshotWaitFor within parameter', () => {
     const waitForShape = snapshotOptionsSchema.shape.snapshotWaitFor;
     // unwrap ZodOptional to reach the ZodObject's shape
     const innerShape = (waitForShape as any)._def?.innerType?.shape ?? (waitForShape as any).shape;
-    // This assertion turns green after ./install.sh rebuilds the compiled lib.
+    // This assertion turns green after ./build.py rebuilds the compiled lib.
     // Pre-rebuild: innerShape has {text, textGone, selector} — no `within`.
     // Post-rebuild: innerShape has {text, textGone, selector, within}.
     const hasWithin = Object.prototype.hasOwnProperty.call(innerShape ?? {}, 'within');

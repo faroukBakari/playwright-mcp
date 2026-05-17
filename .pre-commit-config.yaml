@@ -15,42 +15,42 @@ repos:
     hooks:
       - id: extension-eslint
         name: extension eslint
-        entry: bash -c 'eval "$(fnm env)" && fnm use 22 && cd packages/extension && npx eslint src/'
+        entry: bash -c 'cd packages/extension && fnm exec --using 22 -- npx eslint src/'
         language: system
         pass_filenames: false
         files: ^packages/extension/src/.*\.tsx?$
 
       - id: extension-typecheck
         name: extension typecheck
-        entry: bash -c 'eval "$(fnm env)" && fnm use 22 && cd packages/extension && npx tsc --noEmit'
+        entry: bash -c 'cd packages/extension && fnm exec --using 22 -- npx tsc --noEmit'
         language: system
         pass_filenames: false
         files: ^packages/extension/src/.*\.tsx?$
 
       - id: extension-tests
         name: extension unit tests
-        entry: bash -c 'eval "$(fnm env)" && fnm use 22 && cd packages/extension && npx vitest run'
+        entry: bash -c 'cd packages/extension && fnm exec --using 22 -- npx vitest run'
         language: system
         pass_filenames: false
         files: ^packages/extension/.*\.tsx?$
 
       - id: server-tests
         name: server unit tests
-        entry: bash -c 'eval "$(fnm env)" && fnm use 22 && cd packages/playwright-mcp && npx vitest run --coverage'
+        entry: bash -c 'cd packages/playwright-mcp && fnm exec --using 22 -- npx vitest run --coverage'
         language: system
         pass_filenames: false
         files: ^packages/playwright-mcp/.*\.tsx?$
 
       - id: server-typecheck
         name: server typecheck
-        entry: bash -c 'eval "$(fnm env)" && fnm use 22 && bash scripts/check-typecheck-baseline.sh'
+        entry: uv run scripts/check-typecheck-baseline.py
         language: system
         pass_filenames: false
         files: ^packages/playwright-mcp/.*\.tsx?$
 
       - id: coverage-ratchet
         name: coverage ratchet
-        entry: bash -c 'eval "$(fnm env)" && fnm use 22 && bash ../scripts/check-coverage-ratchet.sh'
+        entry: uv run ../scripts/check-coverage-ratchet.py
         language: system
         pass_filenames: false
         files: ^packages/playwright-mcp/.*\.tsx?$

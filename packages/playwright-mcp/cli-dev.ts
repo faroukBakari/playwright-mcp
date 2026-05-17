@@ -5,7 +5,7 @@
  *
  * Bundle resolution: src/XBundleImpl symlinks point to bundles/X/src/XBundleImpl.ts
  *
- * Usage: ./server.sh start
+ * Usage: ./server.py start
  */
 
 // Relative paths bypass playwright-core's exports field.
