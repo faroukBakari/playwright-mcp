@@ -504,6 +504,7 @@ describe('CDPRelayServer — Wave 2', () => {
 
     // Then Playwright disconnects → both sides gone → disconnected
     await harness.disconnect(pw);
+    await sleep(20);
     expect(harness.relay.state).toBe('disconnected');
   });
 

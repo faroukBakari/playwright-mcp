@@ -268,7 +268,7 @@ describe('normalizePath — POSIX paths passthrough', () => {
   });
 
   it('expands ~ to home directory', () => {
-    const home = os.homedir();
+    const home = os.homedir().replace(/\\/g, '/');
     expect(normalizePath('~/Downloads/file.pdf'))
       .toBe(`${home}/Downloads/file.pdf`);
   });

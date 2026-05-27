@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import fs from 'fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 import { validateFilename, Response } from 'playwright-core/src/tools/response';
 import evaluateTools from 'playwright-core/src/tools/evaluate';
@@ -148,9 +150,9 @@ describe('evaluate filename end-to-end (real Response)', () => {
       response as any
     );
 
-    // The file must be written to /tmp/<filename>
+    // The file must be written to os.tmpdir()/<filename>
     expect(writeSpy).toHaveBeenCalledWith(
-      '/tmp/scrape-result.json',
+      path.join(os.tmpdir(), 'scrape-result.json'),
       '{"scraped":"data"}',
       'utf-8'
     );
@@ -176,7 +178,7 @@ describe('evaluate filename end-to-end (real Response)', () => {
     );
 
     expect(writeSpy).toHaveBeenCalledWith(
-      '/tmp/code-output.json',
+      path.join(os.tmpdir(), 'code-output.json'),
       expect.any(String),
       'utf-8'
     );
@@ -216,7 +218,7 @@ describe('evaluate tool filename output', () => {
     await tool.handle(createToolContext(mockTab), { function: '() => "test"', filename: 'result.json' }, mockResponse as any);
 
     expect(mockResponse.addFileResult).toHaveBeenCalledWith(
-      expect.objectContaining({ fileName: '/tmp/result.json' }),
+      expect.objectContaining({ fileName: path.join(os.tmpdir(), 'result.json') }),
       expect.any(String)
     );
     expect(mockResponse.addTextResult).not.toHaveBeenCalled();
@@ -297,7 +299,7 @@ describe('runCode tool filename output', () => {
     );
 
     expect(mockResponse.addFileResult).toHaveBeenCalledWith(
-      expect.objectContaining({ fileName: '/tmp/output.json' }),
+      expect.objectContaining({ fileName: path.join(os.tmpdir(), 'output.json') }),
       expect.any(String)
     );
     expect(mockResponse.addTextResult).not.toHaveBeenCalled();

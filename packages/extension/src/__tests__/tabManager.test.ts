@@ -12,6 +12,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'node:url';
 import { TabManager } from '../tabManager';
 import { attachedDebuggees } from './chrome-mock';
 
@@ -379,7 +380,7 @@ describe('TabManager', () => {
 
   describe('encapsulation', () => {
     it('no source file outside tabManager.ts calls chrome.debugger.attach or detach', () => {
-      const srcDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+      const srcDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
       const pattern = /chrome\.debugger\.(attach|detach)\(/;
       // debuggerManager.ts is a documented exception: owns reattach-on-security-detach
       const exemptions = new Set(['tabManager.ts', 'debuggerManager.ts']);

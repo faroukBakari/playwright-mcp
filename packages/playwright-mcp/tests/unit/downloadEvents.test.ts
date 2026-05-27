@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const playwrightCoreSrc = path.resolve(__dirname, '../../../../../playwright/packages/playwright-core/src');
 
 import { ArtifactCollector } from 'playwright-core/src/tools/artifactCollector';
 import type { Download } from 'playwright-core/src/tools/artifactCollector';
@@ -232,7 +236,7 @@ describe('ArtifactCollector download events', () => {
 describe('browser download dedup', () => {
   it('_downloadCreated contains the dedup guard (if has(uuid) return)', () => {
     const browserSource = readFileSync(
-      path.resolve('/home/farouk/workspace/web-automation/playwright/packages/playwright-core/src/server/browser.ts'),
+      path.resolve(playwrightCoreSrc, 'server/browser.ts'),
       'utf-8'
     );
     // The guard we added: if (this._downloads.has(uuid)) return;
@@ -247,7 +251,7 @@ describe('browser download dedup', () => {
 describe('crPage download handler wiring', () => {
   it('crPage subscribes to Page.downloadWillBegin and Page.downloadProgress', () => {
     const crPageSource = readFileSync(
-      path.resolve('/home/farouk/workspace/web-automation/playwright/packages/playwright-core/src/server/chromium/crPage.ts'),
+      path.resolve(playwrightCoreSrc, 'server/chromium/crPage.ts'),
       'utf-8'
     );
     expect(crPageSource).toContain('Page.downloadWillBegin');
@@ -256,7 +260,7 @@ describe('crPage download handler wiring', () => {
 
   it('crPage has _onPageDownloadWillBegin and _onPageDownloadProgress handlers', () => {
     const crPageSource = readFileSync(
-      path.resolve('/home/farouk/workspace/web-automation/playwright/packages/playwright-core/src/server/chromium/crPage.ts'),
+      path.resolve(playwrightCoreSrc, 'server/chromium/crPage.ts'),
       'utf-8'
     );
     expect(crPageSource).toContain('_onPageDownloadWillBegin');
