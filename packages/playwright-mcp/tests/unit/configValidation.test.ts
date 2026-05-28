@@ -76,6 +76,42 @@ describe('validateConfig', () => {
     });
   });
 
+  describe('never-expire TTL sentinels', () => {
+    function buildRelayConfig(relay: any): FullConfig {
+      return mergeConfig(defaultConfig, { relay });
+    }
+
+    it('accepts relay.sessionGraceTTL = 0 (never expire)', async () => {
+      const config = buildRelayConfig({ ...validRelay, sessionGraceTTL: 0 });
+      await expect(validateConfig(config)).resolves.toBeUndefined();
+    });
+
+    it('accepts relay.backendDisposalTTL = 0 (never expire)', async () => {
+      const config = buildRelayConfig({ ...validRelay, backendDisposalTTL: 0 });
+      await expect(validateConfig(config)).resolves.toBeUndefined();
+    });
+
+    it('rejects relay.sessionGraceTTL < 0', async () => {
+      const config = buildRelayConfig({ ...validRelay, sessionGraceTTL: -1 });
+      await expect(validateConfig(config)).rejects.toThrow('relay.sessionGraceTTL must be >= 0');
+    });
+
+    it('rejects relay.backendDisposalTTL < 0', async () => {
+      const config = buildRelayConfig({ ...validRelay, backendDisposalTTL: -1 });
+      await expect(validateConfig(config)).rejects.toThrow('relay.backendDisposalTTL must be >= 0');
+    });
+
+    it('accepts infrastructure.sessionTransportIdleTTL = 0 (never expire)', async () => {
+      const config = buildConfig({ timeouts: { infrastructure: { sessionTransportIdleTTL: 0 } } });
+      await expect(validateConfig(config)).resolves.toBeUndefined();
+    });
+
+    it('rejects infrastructure.sessionTransportIdleTTL < 0', async () => {
+      const config = buildConfig({ timeouts: { infrastructure: { sessionTransportIdleTTL: -1 } } });
+      await expect(validateConfig(config)).rejects.toThrow('infrastructure.sessionTransportIdleTTL must be >= 0');
+    });
+  });
+
   describe('chromium sandbox', () => {
     it('auto-sets sandbox on Linux for chrome channel', async () => {
       const config = buildConfig({});

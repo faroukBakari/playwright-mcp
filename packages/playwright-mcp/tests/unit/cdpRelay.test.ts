@@ -1174,6 +1174,13 @@ describe('CDPRelayServer — sessionId routing', () => {
   });
 
   it('client disconnect sends detachTab to extension', async () => {
+    // NOTE(farouk): rebuild harness with a short per-session grace so disconnect → grace
+    // expiry → detachTab path fires within the test window. The describe-level harness
+    // uses sessionGraceTTL=0, which now means persistent grace (no auto-expiry).
+    await harness.teardown();
+    harness = new RelayTestHarness();
+    await harness.setup({ graceTTL: 200, graceBufferMaxBytes: 1024, sessionGraceTTL: 30 });
+
     const ext = await harness.connectExtension();
     const extMessages: any[] = [];
 
@@ -1215,7 +1222,8 @@ describe('CDPRelayServer — sessionId routing', () => {
     await mc.disconnectClient('A');
 
     // Extension should receive detachTab with the correct sessionId
-    await sleep(30);
+    // (wait past the 30ms sessionGraceTTL for the per-session grace to expire)
+    await sleep(80);
     const detachMsg = extMessages.find(m => m.method === 'detachTab');
     expect(detachMsg).toBeDefined();
     expect(detachMsg.params.sessionId).toBe(sessionIdA);

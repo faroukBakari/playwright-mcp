@@ -93,7 +93,7 @@ describe('mergeConfig infrastructure timeouts', () => {
 
   it('preserves bridgeBuffer when other infra fields overridden', () => {
     const result = mergeConfig(defaultConfig, {
-      timeouts: { infrastructure: { sessionIdleTTL: 300 } },
+      timeouts: { infrastructure: { sessionTransportIdleTTL: 60000 } },
     });
     expect(result.timeouts?.infrastructure?.bridgeBuffer).toBe(5000);
   });
@@ -104,6 +104,7 @@ describe('mergeConfig infrastructure timeouts', () => {
     });
     expect(result.timeouts?.infrastructure).toEqual({
       bridgeBuffer: 5000,
+      sessionTransportIdleTTL: 120000,
     });
   });
 });
