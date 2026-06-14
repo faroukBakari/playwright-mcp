@@ -1174,59 +1174,61 @@ describe('CDPRelayServer — sessionId routing', () => {
   });
 
   it('client disconnect sends detachTab to extension', async () => {
-    // NOTE(farouk): rebuild harness with a short per-session grace so disconnect → grace
-    // expiry → detachTab path fires within the test window. The describe-level harness
-    // uses sessionGraceTTL=0, which now means persistent grace (no auto-expiry).
-    await harness.teardown();
-    harness = new RelayTestHarness();
-    await harness.setup({ graceTTL: 200, graceBufferMaxBytes: 1024, sessionGraceTTL: 30 });
+    // Per-test harness with non-zero sessionGraceTTL — the describe-level
+    // harness uses TTL=0 (persistent grace, never expires, never detaches).
+    // This test verifies the grace-expiry→detachTab path, which requires
+    // a finite TTL so the timer actually fires.
+    const graceHarness = new RelayTestHarness();
+    await graceHarness.setup({ graceTTL: 200, graceBufferMaxBytes: 1024, sessionGraceTTL: 50 });
+    try {
+      const ext = await graceHarness.connectExtension();
+      const extMessages: any[] = [];
 
-    const ext = await harness.connectExtension();
-    const extMessages: any[] = [];
+      ext.on('message', (data: WebSocket.RawData) => {
+        const msg = JSON.parse(data.toString());
+        extMessages.push(msg);
+        if (msg.method === 'createTab') {
+          ext.send(JSON.stringify({
+            id: msg.id,
+            result: { tabId: 42, targetInfo: { type: 'page', url: 'https://example.com' } },
+          }));
+        }
+        if (msg.method === 'attachToTab') {
+          ext.send(JSON.stringify({
+            id: msg.id,
+            result: { targetInfo: { type: 'page', url: 'https://example.com' }, tabId: 42 },
+          }));
+        }
+        if (msg.method === 'detachTab') {
+          ext.send(JSON.stringify({ id: msg.id, result: {} }));
+        }
+      });
 
-    ext.on('message', (data: WebSocket.RawData) => {
-      const msg = JSON.parse(data.toString());
-      extMessages.push(msg);
-      if (msg.method === 'createTab') {
-        ext.send(JSON.stringify({
-          id: msg.id,
-          result: { tabId: 42, targetInfo: { type: 'page', url: 'https://example.com' } },
-        }));
-      }
-      if (msg.method === 'attachToTab') {
-        ext.send(JSON.stringify({
-          id: msg.id,
-          result: { targetInfo: { type: 'page', url: 'https://example.com' }, tabId: 42 },
-        }));
-      }
-      if (msg.method === 'detachTab') {
-        ext.send(JSON.stringify({ id: msg.id, result: {} }));
-      }
-    });
+      const mc = new MultiClientHelper(graceHarness);
+      await mc.connectClient('A');
 
-    const mc = new MultiClientHelper(harness);
-    await mc.connectClient('A');
+      // Trigger Target.setAutoAttach (deferred — no tab yet)
+      mc.wsFor('A')!.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
+      await sleep(30);
 
-    // Trigger Target.setAutoAttach (deferred — no tab yet)
-    mc.wsFor('A')!.send(JSON.stringify({ id: 1, method: 'Target.setAutoAttach', params: {} }));
-    await sleep(30);
+      // Explicitly create tab via sideband
+      const sessions = graceHarness.relay.activeSessions();
+      const sessionIdA = sessions[0]?.sessionId;
+      expect(sessionIdA).toBeDefined();
+      await graceHarness.relay.createTab(sessionIdA!, 'about:blank');
+      await sleep(30);
 
-    // Explicitly create tab via sideband
-    const sessions = harness.relay.activeSessions();
-    const sessionIdA = sessions[0]?.sessionId;
-    expect(sessionIdA).toBeDefined();
-    await harness.relay.createTab(sessionIdA!, 'about:blank');
-    await sleep(30);
+      // Disconnect client A — enters per-session grace (50ms)
+      await mc.disconnectClient('A');
 
-    // Disconnect client A
-    await mc.disconnectClient('A');
-
-    // Extension should receive detachTab with the correct sessionId
-    // (wait past the 30ms sessionGraceTTL for the per-session grace to expire)
-    await sleep(80);
-    const detachMsg = extMessages.find(m => m.method === 'detachTab');
-    expect(detachMsg).toBeDefined();
-    expect(detachMsg.params.sessionId).toBe(sessionIdA);
+      // Wait for grace expiry (50ms) + margin
+      await sleep(80);
+      const detachMsg = extMessages.find(m => m.method === 'detachTab');
+      expect(detachMsg).toBeDefined();
+      expect(detachMsg.params.sessionId).toBe(sessionIdA);
+    } finally {
+      await graceHarness.teardown();
+    }
   });
 
   it('forwardCDPCommand includes sessionId to extension', async () => {

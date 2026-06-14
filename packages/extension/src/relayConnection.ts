@@ -119,7 +119,12 @@ export class RelayConnection {
     'Network.requestWillBeSent', 'Network.responseReceived', 'Network.loadingFinished',
     'Network.loadingFailed', 'Network.dataReceived', 'Network.requestWillBeSentExtraInfo',
     'Network.responseReceivedExtraInfo', 'Network.requestServedFromCache',
+    'Network.policyUpdated',
     'Log.entryAdded',
+    'Page.lifecycleEvent', 'Page.frameStartedNavigating', 'Page.frameStartedLoading',
+    'Page.frameStoppedLoading', 'Page.frameNavigated', 'Page.frameResized',
+    'Page.domContentEventFired', 'Page.loadEventFired',
+    'Runtime.executionContextCreated', 'Runtime.executionContextsCleared',
   ]);
 
   private async _onDebuggerEvent(source: chrome.debugger.DebuggerSession, method: string, params: any): Promise<void> {

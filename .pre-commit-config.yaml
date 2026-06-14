@@ -22,7 +22,7 @@ repos:
 
       - id: extension-typecheck
         name: extension typecheck
-        entry: bash -c 'cd packages/extension && fnm exec --using 22 -- npx tsc --noEmit'
+        entry: bash -c 'cd packages/extension && fnm exec --using 22 -- pnpm exec tsc --noEmit'
         language: system
         pass_filenames: false
         files: ^packages/extension/src/.*\.tsx?$
